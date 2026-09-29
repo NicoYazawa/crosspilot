@@ -1,0 +1,60 @@
+# CrossPilot 本地依赖
+#
+# 敏感配置透传宿主机环境变量，缺失时直接报错，避免明文落盘。
+# 镜像版本与宿主机本地已有版本对齐，避免额外下载。
+
+name: crosspilot
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: crosspilot-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-crosspilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?必须设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-crosspilot}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    # Postgres 18 的 PGDATA 默认在 /var/lib/postgresql/18/docker，
+    # 挂载点必须是 /var/lib/postgresql，挂 .../data 会静默不持久化。
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crosspilot} -d ${POSTGRES_DB:-crosspilot}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.8.2-alpine
+    container_name: crosspilot-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.19.0
+    container_name: crosspilot-qdrant
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    # 不设 healthcheck：镜像内没有 curl/wget，任何基于自带二进制的探针都会
+    # 「总是通过」，比没有探针更糟。就绪性由服务端 /health 自行探测。
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  qdrant-data:

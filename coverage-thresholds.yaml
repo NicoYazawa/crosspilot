@@ -1,0 +1,52 @@
+# 分档覆盖率门槛。
+#
+# 为什么不一刀切：领域层是纯逻辑，没有理由不接近全覆盖；迁移执行器、连接池
+# 这类代码必须连上真实数据库才跑得动，硬套同样的数字只会逼人写空测试凑数。
+#
+# 豁免优先于规则，规则之间按书写顺序匹配先命中者生效；prefix 都是导入路径前缀。
+# 出现在覆盖率报告里的每个包都必须命中一条规则或一条豁免，否则 gate 报错。
+version: 1
+
+rules:
+  - prefix: github.com/NicoYazawa/crosspilot/scripts/
+    min: 0
+    reason: 开发工具，服务于其他包的测试，本身不参与交付物的质量结论
+
+  - prefix: github.com/NicoYazawa/crosspilot/internal/domain/
+    min: 95
+    reason: 领域层是纯逻辑，金额与状态机的错误分支必须有测试守住
+
+  - prefix: github.com/NicoYazawa/crosspilot/internal/application/
+    min: 90
+    reason: 应用层是编排逻辑，主要路径与错误分支都应当被覆盖
+
+  - prefix: github.com/NicoYazawa/crosspilot/internal/agent/
+    min: 90
+    reason: Agent 编排影响最终答复，工具调用与失败回退都要有测试
+
+  - prefix: github.com/NicoYazawa/crosspilot/internal/presentation/
+    min: 85
+    reason: 接口层大量代码是参数搬运，门槛略低但不允许出现整块空白
+
+  - prefix: github.com/NicoYazawa/crosspilot/internal/config/
+    min: 90
+    reason: 配置读错会在生产静默生效，加载与校验路径要测全
+
+  - prefix: github.com/NicoYazawa/crosspilot/internal/infra/
+    min: 80
+    reason: 纯函数部分应当测到；连真实服务的分支由集成测试覆盖
+
+  - prefix: github.com/NicoYazawa/crosspilot/internal/observability/
+    min: 85
+    reason: 端点解析与脱敏是纯函数，导出管道可对着假接收端验证
+
+  - prefix: github.com/NicoYazawa/crosspilot/internal/container/
+    min: 85
+    reason: 装配根决定进程能否起来，失败分支要覆盖
+
+exclusions:
+  - prefix: github.com/NicoYazawa/crosspilot/cmd/
+    reason: 进程入口，逻辑都在可测的包里，main 只负责接线与信号处理
+
+  - prefix: github.com/NicoYazawa/crosspilot/internal/infra/postgres/
+    reason: 迁移执行器与连接池的核心路径必须连真实 Postgres 才能跑（由 /health 的端到端验证与集成测试覆盖），此处不设槛

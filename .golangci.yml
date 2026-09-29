@@ -1,0 +1,78 @@
+# golangci-lint 配置。版本由 Taskfile 固定，本地与 CI 行为一致。
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    # 错误处理：本项目大量依赖 errors.Is / errors.Join，包装方式必须统一
+    - errorlint
+    # 枚举 switch 必须穷尽——币种小数位与订单状态机都靠这个兜住
+    - exhaustive
+    # 资源泄漏：HTTP 响应体、SQL 行、连接
+    - bodyclose
+    - noctx
+    - rowserrcheck
+    - sqlclosecheck
+    # 安全
+    - gosec
+    # 风格与可读性
+    - gocritic
+    - misspell
+    - revive
+    - unconvert
+    - usestdlibvars
+    - whitespace
+    # 常见笔误
+    - nilerr
+    - predeclared
+    - unconvert
+
+  settings:
+    errcheck:
+      # 显式 `_ = f()` 是经过判断的取舍，不再重复报警
+      check-blank: false
+    exhaustive:
+      default-signifies-exhaustive: true
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+      disabled-checks:
+        # 允许 if/else 链，便于按条件书写校验分支
+        - ifElseChain
+        # 中文注释里出现英文引号很常见，不强制改写
+        - commentedOutCode
+        # 领域值对象（Money、Product、Order）刻意按值传递：它们是不可变的
+        # 值语义类型，改成指针只会把栈上分配推去堆上，并不更快
+        - hugeParam
+
+  exclusions:
+    generated: lax
+    rules:
+      # 测试里重复的字面量是刻意的，改常量反而降低可读性
+      - path: _test\.go
+        linters:
+          - goconst
+          - dupl
+      # 表驱动测试必然出现大量结构相似的分支
+      - path: _test\.go
+        linters:
+          - gocritic
+        text: dupSubExpr
+      # 测试里构造请求不必逐个带上 context，与生产代码的约束不是一回事
+      - path: _test\.go
+        linters:
+          - noctx
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/NicoYazawa/crosspilot

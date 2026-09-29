@@ -1,0 +1,159 @@
+version: '3'
+
+# 跨平台构建入口。
+# 所有代码质量工具通过 `go run <module>@<version>` 调用：版本钉在这里，
+# 本地与 CI 行为一致，且不需要在开发机上预装任何二进制。
+# 命令一律使用 Task 内嵌 sh 解释器可直接执行的形式，不依赖 rm/del 这类平台专有工具。
+
+silent: true
+
+vars:
+  GOLANGCI_LINT_VERSION: v2.14.0
+  COVERAGE_FILE: coverage.out
+  THRESHOLDS_FILE: coverage-thresholds.yaml
+  BIN_DIR: bin
+  BIN_NAME: crosspilot-server
+  BIN_EXT: '{{if eq OS "windows"}}.exe{{end}}'
+
+tasks:
+  default:
+    desc: 列出所有可用任务
+    cmds:
+      - task --list-all
+
+  # ---------------------------------------------------------------------------
+  # 代码质量
+  # ---------------------------------------------------------------------------
+
+  fmt:
+    desc: 格式化 Go 代码
+    cmds:
+      - gofmt -l -w .
+
+  fmt:check:
+    desc: 检查格式是否符合规范（不修改文件）
+    cmds:
+      - |
+        out=$(gofmt -l .)
+        if [ -n "$out" ]; then
+          echo "以下文件未格式化："
+          echo "$out"
+          exit 1
+        fi
+
+  lint:
+    desc: 静态检查（golangci-lint）
+    cmds:
+      - go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}} run ./...
+
+  arch:
+    desc: 架构依赖方向检查（铁律：依赖只能由外向内）
+    # 用仓库自带的测试而非外部工具：约束必须在任何平台上给出同样的结论
+    cmds:
+      - go test ./tools/arch/ -count=1
+
+  vuln:
+    desc: 依赖漏洞扫描
+    cmds:
+      - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # ---------------------------------------------------------------------------
+  # 测试与覆盖率
+  # ---------------------------------------------------------------------------
+
+  test:
+    desc: 运行单元测试
+    cmds:
+      - go test ./... -count=1
+
+  test:race:
+    desc: 带竞态检测运行单元测试（需要 C 编译器，见下方说明）
+    # -race 依赖 cgo，本机没有 C 编译器时无法执行。
+    # 竞态检测放在 CI（Ubuntu 自带 gcc）跑，本地保留一条能跑通的路径，
+    # 避免出现「本地必然失败、于是没人跑」的门禁。
+    env:
+      CGO_ENABLED: '1'
+    cmds:
+      - go test ./... -race -count=1
+
+  cover:
+    desc: 生成覆盖率报告
+    cmds:
+      - go test ./... -count=1 -covermode=atomic -coverprofile={{.COVERAGE_FILE}}
+
+  cover:gate:
+    desc: 按包阈值校验覆盖率，低于阈值则以非 0 退出
+    deps: [cover]
+    cmds:
+      - go run ./scripts/coverage-gate -profile {{.COVERAGE_FILE}} -thresholds {{.THRESHOLDS_FILE}}
+
+  # ---------------------------------------------------------------------------
+  # 聚合任务
+  # ---------------------------------------------------------------------------
+
+  check:
+    desc: 本地完整校验（格式 + 静态检查 + 架构 + 测试 + 覆盖率闸门）
+    cmds:
+      - task: fmt:check
+      - task: lint
+      - task: arch
+      - task: test
+      - task: cover:gate
+
+  # ---------------------------------------------------------------------------
+  # 构建与运行
+  # ---------------------------------------------------------------------------
+
+  build:
+    desc: 构建静态二进制
+    # CGO_ENABLED=0 才是不依赖系统 libc 的静态产物；
+    # 依赖树里没有需要 cgo 的库，关掉不影响功能
+    env:
+      CGO_ENABLED: '0'
+    cmds:
+      - go build -trimpath -ldflags "-s -w" -o {{.BIN_DIR}}/{{.BIN_NAME}}{{.BIN_EXT}} ./cmd/server
+
+  run:
+    desc: 直接运行服务（不经编译产物）
+    cmds:
+      - go run ./cmd/server
+
+  clean:
+    desc: 清除构建产物与覆盖率报告
+    cmds:
+      - go clean -cache -testcache
+      - rm -rf {{.BIN_DIR}} {{.COVERAGE_FILE}} coverage.html
+
+  migrate:up:
+    desc: 执行数据库迁移
+    cmds:
+      - go run ./cmd/migrate up
+
+  migrate:down:
+    desc: 回滚最近一次数据库迁移
+    cmds:
+      - go run ./cmd/migrate down
+
+  # ---------------------------------------------------------------------------
+  # 本地依赖
+  # ---------------------------------------------------------------------------
+
+  docker:up:
+    desc: 启动本地依赖（Postgres / Redis / Qdrant）
+    cmds:
+      - docker compose up -d
+
+  docker:down:
+    desc: 停止本地依赖（保留数据卷，用于验证 /health 降级）
+    cmds:
+      - docker compose down
+
+  docker:reset:
+    desc: 停止本地依赖并清除数据卷
+    cmds:
+      - docker compose down -v
+
+  docker:logs:
+    desc: 跟踪本地依赖日志
+    cmds:
+      - docker compose logs -f

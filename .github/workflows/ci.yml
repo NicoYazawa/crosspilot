@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支的旧运行在新提交到来时取消，避免排队堆积
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: -mod=readonly
+
+jobs:
+  # 主门禁：格式、静态检查、依赖方向、测试、覆盖率阈值。
+  # CI 跑的就是开发机上的 `task check`，不另起一套流程——
+  # 两边命令不一致时，CI 绿了也说明不了本地是好的。
+  check:
+    name: 校验（Linux）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 与本地 `task check` 同一批命令，只把测试换成带竞态检测的版本：
+      # 竞态检测依赖 cgo，开发机不一定有 C 编译器，这里必须跑一次。
+      - name: 格式、静态检查与依赖方向
+        run: task fmt:check lint arch
+
+      - name: 单元测试（含竞态检测）
+        run: task test:race
+
+      - name: 覆盖率阈值
+        run: task cover:gate
+
+      - name: 构建产物
+        run: task build
+
+      - name: 检查二进制体积（A5：静态二进制 < 30MB）
+        run: |
+          size=$(stat -c %s bin/crosspilot-server)
+          echo "二进制大小：$((size / 1024 / 1024)) MB"
+          if [ "$size" -gt 31457280 ]; then
+            echo "::error::二进制超过 30MB 上限"
+            exit 1
+          fi
+
+  # Windows 单独跑一次依赖方向与构建。
+  # 历史上这条检查曾因工具在 Windows 上的路径分隔符缺陷而「全量误报」，
+  # 因此这里必须有一次真实运行来证明它在两个平台上结论一致。
+  windows:
+    name: 依赖方向与构建（Windows）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 依赖方向检查
+        run: task arch
+
+      - name: 构建产物
+        run: task build
