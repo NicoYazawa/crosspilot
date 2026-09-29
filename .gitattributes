@@ -1,0 +1,19 @@
+# 一律以 LF 落库与检出。
+#
+# 跨平台协作时，换行符不一致会让同一份文件在 diff 里整篇变动，
+# 也会让「本地通过、CI 失败」这类问题变得难以定位。
+* text=auto eol=lf
+
+# 二进制文件不做换行符转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+
+# 锁文件与生成的依赖清单在合并时不做逐行合并，避免产生冲突标记
+go.sum -diff
+package-lock.json -diff
