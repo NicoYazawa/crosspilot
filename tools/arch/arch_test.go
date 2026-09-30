@@ -53,10 +53,21 @@ var components = []component{
 		vendorDeps:  []string{"github.com/govalues/decimal"},
 	},
 	{
+		// 价格表是基础设施层的独立组件：加载 YAML、查表、不依赖其他内层。
+		// 把它单独列出来而不是塞进 infra，是因为它有专属的 vendorDeps（YAML）
+		// 和较窄的依赖面，与 pg/redis/qdrant 适配器属于不同关注点。
+		name:       "pricing",
+		dirs:       []string{"internal/pricing"},
+		vendorDeps: []string{"github.com/govalues/decimal", "gopkg.in/yaml.v3"},
+	},
+	{
 		name: "config",
 		dirs: []string{"internal/config"},
 	},
 	{
+		// OTel/HTTP metrics 入口（独立于 infra 子包）—— 历史上的脱敏器与
+		// Sink 都在 internal/infra/observability/，但顶层有 internal/observability
+		// 这个 OTel 启动器；这里只声明后者，避免「没声明」误报。
 		name:        "observability",
 		dirs:        []string{"internal/observability"},
 		projectDeps: []string{"internal/config"},
@@ -84,17 +95,35 @@ var components = []component{
 		},
 	},
 	{
-		// 应用层是用例编排：它认识领域模型，但不认识数据库与 HTTP。
-		// 持久化细节通过领域端口注入，因此这里只允许依赖 internal/domain。
-		name:        "application",
-		dirs:        []string{"internal/application"},
-		projectDeps: []string{"internal/domain"},
+		// Agent 编排：ReAct 循环、中间件、工具、Harness。这是被 application
+		// 与 presentation 同时使用的核心，因此单独成层（不允许被更内层依赖）。
+		name: "agent",
+		dirs: []string{"internal/agent"},
+		projectDeps: []string{
+			"internal/domain", "internal/infra",
+			// agent 内部的子包互依赖是允许的（orchestrator 需要 tools，
+			// middleware 需要 runevent 等）。它们在同一个组件内，按目录
+			// 前缀判归属，因此不会落到"跨层依赖"上。
+			"internal/agent",
+		},
+		vendorDeps: []string{"github.com/google/uuid"},
 	},
 	{
-		name:        "presentation",
-		dirs:        []string{"internal/presentation"},
-		projectDeps: []string{"internal/domain", "internal/config", "internal/infra"},
-		vendorDeps:  []string{"github.com/go-chi/chi"},
+		// 应用层是用例编排：它认识领域模型与 agent，但不认识数据库与 HTTP。
+		// 持久化细节通过领域端口注入；agent 通过 interface 调用，不感知实现。
+		name:        "application",
+		dirs:        []string{"internal/application"},
+		projectDeps: []string{"internal/domain", "internal/agent"},
+		vendorDeps:  []string{"github.com/stretchr/testify"},
+	},
+	{
+		name: "presentation",
+		dirs: []string{"internal/presentation"},
+		projectDeps: []string{
+			"internal/domain", "internal/config", "internal/infra",
+			"internal/agent", "internal/application", "internal/presentation",
+		},
+		vendorDeps: []string{"github.com/go-chi/chi", "github.com/stretchr/testify"},
 	},
 	{
 		// 装配根是唯一的例外：它的职责就是把所有人接起来

@@ -6,6 +6,10 @@
 //
 // 这一层故意不依赖 trade service：P4 阶段目标是「端到端 SSE + journal 跑通」，
 // trade 决议接入留 P7。
+//
+// P5 阶段新增：Bridge 每 Append 一条事件到 journal 后，**额外**调一次
+// Emitter.Emit(&ev)，把事件送进观测通道。Emitter 是可选字段——单测可以不装。
+// 这条路径不影响 P4 E1–E6 的任何验收（journal 写仍同步完成）。
 package orderflow
 
 import (
@@ -13,6 +17,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/NicoYazawa/crosspilot/internal/agent/observability"
 	"github.com/NicoYazawa/crosspilot/internal/agent/orchestrator"
 	"github.com/NicoYazawa/crosspilot/internal/agent/runevent"
 )
@@ -61,12 +66,17 @@ type Journal interface {
 //  4. 返回 journal 里全部 RunEvent 给 SSE handler，由它写给订阅者。
 //
 // 「先 journal 后 SSE」的写入顺序由本类强制——handler 不会绕过它去触发模型。
+// 「先 journal 后 Emit」：P5 阶段新增——Append 成功后**额外**调用 Emitter.Emit，
+// 把事件送进观测通道。Emitter 自身保证不阻塞（队列满即 drop）。
 type Bridge struct {
 	Orch Orchestrator
-	J     Journal
-	C     Clock
+	J    Journal
+	C    Clock
 	// DefaultAgent 是默认 agent 名（不通过 RunnerConfig 指定时使用）。
 	DefaultAgent string
+	// Emitter 是可选的观测通道发射器。nil 时 Bridge 不发观测事件（兼容单测）。
+	// 装上后每次 Append 成功后调用一次 Emit(&ev)。
+	Emitter *observability.Emitter
 }
 
 // Run 同步驱动一次 agent run 并把全部事件落 journal。
@@ -87,6 +97,7 @@ func (b *Bridge) Run(ctx context.Context, cfg RunnerConfig) ([]runevent.Event, e
 	if _, err := b.J.Append(ctx, ev); err != nil {
 		return nil, err
 	}
+	b.observe(ev)
 
 	agent := cfg.Agent
 	if agent == "" {
@@ -111,6 +122,7 @@ func (b *Bridge) Run(ctx context.Context, cfg RunnerConfig) ([]runevent.Event, e
 	if _, err2 := b.J.Append(ctx, finishEv); err2 != nil && err == nil {
 		err = err2
 	}
+	b.observe(finishEv)
 
 	out, _ := b.J.Since(ctx, cfg.RunID, 0, 0)
 	return out, err
@@ -127,7 +139,21 @@ func (b *Bridge) forward(ctx context.Context, seqr *runevent.Sequencer, oe orche
 	if err != nil {
 		return
 	}
-	_, _ = b.J.Append(ctx, ev)
+	if _, err := b.J.Append(ctx, ev); err != nil {
+		return
+	}
+	b.observe(ev)
+}
+
+// observe 把事件送进观测通道。Emitter 为 nil 时是 no-op（单测兼容）。
+//
+// 注意：这里是同步调用 Emitter.Emit；Emitter 内部保证「同步只塞 channel，
+// 绝不阻塞」（F6 闸门），所以 Bridge 不需要异步处理。
+func (b *Bridge) observe(ev runevent.Event) {
+	if b.Emitter == nil {
+		return
+	}
+	b.Emitter.Emit(&ev)
 }
 
 func (b *Bridge) now() time.Time {

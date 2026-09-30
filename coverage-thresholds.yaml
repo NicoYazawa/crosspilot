@@ -49,6 +49,13 @@ rules:
     min: 85
     reason: 端点解析与脱敏是纯函数，导出管道可对着假接收端验证
 
+  - prefix: github.com/NicoYazawa/crosspilot/internal/pricing/
+    min: 85
+    reason: >
+      价格表是 F4「unpriced 显式」的核心；包小、纯逻辑，85% 已守住主要分支。
+      预留 5% 给边界条件（如 unit_minor=float64 的 YAML 默认解码路径，
+      这些由 yaml.v3 库语义决定，不属于本包逻辑）。
+
   - prefix: github.com/NicoYazawa/crosspilot/internal/container/
     min: 85
     reason: 装配根决定进程能否起来，失败分支要覆盖

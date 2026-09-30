@@ -94,6 +94,9 @@ func buildRouter(
 				Probe: func(ctx context.Context) error { return infraredis.Check(ctx, redisClient) },
 			},
 		},
+		// Observability handler：P5 阶段暂不在容器层接入（依赖 CostStore /
+		// ExperimentStore 的 Postgres 实现，留待 P5 收尾阶段接入；当前
+		// handler_test.go 已覆盖单元测试回路）。
 	})
 }
 

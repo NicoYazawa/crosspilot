@@ -8,6 +8,7 @@ import (
 
 	"github.com/NicoYazawa/crosspilot/internal/config"
 	"github.com/NicoYazawa/crosspilot/internal/presentation/agui"
+	preobs "github.com/NicoYazawa/crosspilot/internal/presentation/observability"
 )
 
 // Deps 是组装路由所需的依赖。
@@ -20,6 +21,8 @@ type Deps struct {
 	AGUI *agui.Deps
 	// HMACSecret 是 AG-UI 鉴权密钥；空表示该中间件跳过（开发期）。
 	HMACSecret []byte
+	// Observability 是 P5 可观测三件套的 handler；为 nil 时不挂载 /observability 路由。
+	Observability *preobs.Handler
 }
 
 // NewRouter 组装路由表。
@@ -39,6 +42,13 @@ func NewRouter(deps Deps) http.Handler {
 	if deps.AGUI != nil {
 		// AG-UI 子应用挂在自己的中间件链里（HMAC + RequestID 之外的）。
 		router.Mount("/", aguiAuthMount(deps.HMACSecret, deps.Logger, agui.Routes(*deps.AGUI)))
+	}
+
+	if deps.Observability != nil {
+		// P5 可观测三件套路由（F1/F2/F4/F8）。
+		// 复用 RequestID + Recoverer，不单独加 HMAC（内部接口，由调用方
+		// 在上游网关做鉴权）。P6 前端面板会消费这些路由。
+		router.Mount("/", deps.Observability.Routes())
 	}
 
 	router.NotFound(errorHandler(deps.Logger, http.StatusNotFound, "not_found"))
