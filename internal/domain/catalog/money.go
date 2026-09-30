@@ -167,6 +167,20 @@ func (m Money) String() string {
 	return fmt.Sprintf("%s %s", m.Amount.String(), m.Currency)
 }
 
+// ToMajorUnitsFloat 将金额转为 float64 的主单位表示（用于非账务场景的展示）。
+// 不推荐用于账务计算，仅用于展示目的。
+func (m Money) ToMajorUnitsFloat() float64 {
+	f, _ := m.Amount.Float64()
+	return f
+}
+
+// ToMajorUnits 返回金额的主单位整数和小数部分（用于精确展示）。
+// 例如 29.99 CNY → (29, 99)。
+func (m Money) ToMajorUnits() (int64, int64) {
+	whole, frac, _ := m.Amount.Int64(m.Currency.Scale())
+	return whole, frac
+}
+
 // moneyJSON 是 Money 的线上表示。金额编码为十进制字符串而不是 JSON number，
 // 避免消费端用二进制浮点解析时重新引入精度误差。
 type moneyJSON struct {

@@ -7,17 +7,34 @@ import (
 
 func validProduct() Product {
 	return Product{
-		ID:          "p-001",
+		ID:          "P0001",
 		Title:       "无线降噪耳机",
 		Description: "主动降噪，续航 30 小时",
-		CategoryID:  "audio",
-		Price:       MustMoney("1299.00", CNY),
-		ImageURL:    "https://example.invalid/p-001.png",
-		Rating:      4.6,
-		ReviewCount: 128,
+		Category:    "数码配件",
+		Brand:       "AudioTech",
+		OriginCountry: "CN",
 		InStock:     true,
-		Attributes:  map[string]string{"颜色": "黑"},
-		Tags:        []string{"耳机", "降噪"},
+		ImageURL:    "https://example.invalid/p-001.png",
+		WeightKg:    0.25,
+		DimensionsCm: map[string]float64{"length": 20, "width": 18, "height": 8},
+		PrimaryPrice: MustMoney("1299.00", CNY),
+		SKUs: []SKU{
+			{ID: "P0001-S1", Spec: "黑色", Price: MustMoney("1299.00", CNY), Stock: 10},
+		},
+		DefaultSKUID: "P0001-S1",
+		ShipsTo:      []string{"CN", "US", "EU"},
+		MaterialTags: []string{"塑料", "金属"},
+		Highlights:   []string{"主动降噪", "30小时续航"},
+		Tags:         []string{"耳机", "降噪"},
+		CanonicalID:  "CANON-P0001",
+		SourcePlatform: "PlatformA",
+		RatingSummary:  map[string]float64{"average": 4.6, "review_count": 128},
+		RatingIsLive:   true,
+		UpdatedAt:     "2024-01-01T00:00:00Z",
+		SourceLanguage: "zh",
+		SourceLocale:   "zh-CN",
+		DataProvenance: "imported",
+		Attributes: map[string]string{"颜色": "黑"},
 	}
 }
 
@@ -34,12 +51,7 @@ func TestProductValidateRejectsBadInput(t *testing.T) {
 	}{
 		{"ID 为空", func(p *Product) { p.ID = "" }},
 		{"标题为空", func(p *Product) { p.Title = "" }},
-		{"币种非法", func(p *Product) { p.Price.Currency = "cny" }},
-		{"价格为负", func(p *Product) { p.Price = MustMoney("-1.00", CNY) }},
-		{"评分越界上", func(p *Product) { p.Rating = 5.1 }},
-		{"评分越界下", func(p *Product) { p.Rating = -0.1 }},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			p := validProduct()
@@ -51,81 +63,125 @@ func TestProductValidateRejectsBadInput(t *testing.T) {
 	}
 }
 
-func TestProductSearchSpecNormalize(t *testing.T) {
-	cases := []struct {
-		name string
-		in   int
-		want int
-	}{
-		{"零值取默认", 0, DefaultSearchLimit},
-		{"负值取默认", -5, DefaultSearchLimit},
-		{"超上限被截断", 10_000, MaxSearchLimit},
-		{"正常值保留", 30, 30},
+func TestProductPrice(t *testing.T) {
+	// 无 SKU 时返回 PrimaryPrice
+	p := Product{ID: "P1", Title: "Test", PrimaryPrice: MustMoney("100.00", CNY)}
+	if got := p.Price(); got.Amount.String() != "100.00" {
+		t.Errorf("Price() = %s, want 100.00", got.Amount.String())
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := ProductSearchSpec{Limit: tc.in}.Normalize()
-			if got.Limit != tc.want {
-				t.Errorf("Limit %d 归一为 %d，期望 %d", tc.in, got.Limit, tc.want)
-			}
-		})
+	// 有库存 SKU 时返回有库存的 SKU 价格
+	p2 := Product{
+		ID:   "P2",
+		Title: "Test2",
+		SKUs: []SKU{
+			{ID: "P2-S1", Spec: "A", Price: MustMoney("50.00", CNY), Stock: 0},
+			{ID: "P2-S2", Spec: "B", Price: MustMoney("75.00", CNY), Stock: 5},
+		},
+		DefaultSKUID: "P2-S1",
 	}
-}
-
-func TestProductSearchSpecNormalizeDoesNotMutate(t *testing.T) {
-	original := ProductSearchSpec{Limit: 0}
-	if got := original.Normalize(); got.Limit == original.Limit {
-		t.Error("Normalize 应返回补齐后的副本")
-	}
-	if original.Limit != 0 {
-		t.Error("Normalize 不应修改原值")
+	if got := p2.Price(); got.Amount.String() != "75.00" {
+		t.Errorf("Price() = %s, want 75.00", got.Amount.String())
 	}
 }
 
-func TestProductSearchSpecValidate(t *testing.T) {
-	low := MustMoney("10.00", USD)
-	high := MustMoney("20.00", USD)
-
-	if err := (ProductSearchSpec{MinPrice: &low, MaxPrice: &high}).Validate(); err != nil {
-		t.Errorf("合法价格区间不应报错，得到 %v", err)
+func TestProductPrimaryAvailableSKU(t *testing.T) {
+	// 优先默认规格
+	p := Product{
+		SKUs: []SKU{
+			{ID: "P-S1", Spec: "A", Stock: 0},
+			{ID: "P-S2", Spec: "B", Stock: 3},
+		},
+		DefaultSKUID: "P-S2",
+	}
+	if got := p.PrimaryAvailableSKU(); got.ID != "P-S2" {
+		t.Errorf("PrimaryAvailableSKU() = %s, want P-S2", got.ID)
 	}
 
-	// 边界相等是允许的
-	if err := (ProductSearchSpec{MinPrice: &high, MaxPrice: &high}).Validate(); err != nil {
-		t.Errorf("上下界相等应允许，得到 %v", err)
+	// 默认规格无库存时选有库存的第一个
+	p2 := Product{
+		SKUs: []SKU{
+			{ID: "P-S1", Spec: "A", Stock: 0},
+			{ID: "P-S2", Spec: "B", Stock: 3},
+		},
+		DefaultSKUID: "P-S1",
+	}
+	if got := p2.PrimaryAvailableSKU(); got.ID != "P-S2" {
+		t.Errorf("PrimaryAvailableSKU() = %s, want P-S2", got.ID)
+	}
+
+	// 都无库存返回第一个
+	p3 := Product{
+		SKUs: []SKU{
+			{ID: "P-S1", Spec: "A", Stock: 0},
+			{ID: "P-S2", Spec: "B", Stock: 0},
+		},
+	}
+	if got := p3.PrimaryAvailableSKU(); got.ID != "P-S1" {
+		t.Errorf("PrimaryAvailableSKU() = %s, want P-S1", got.ID)
 	}
 }
 
-func TestProductSearchSpecValidateRejectsBadInput(t *testing.T) {
-	low := MustMoney("10.00", USD)
-	high := MustMoney("20.00", USD)
-	eur := MustMoney("5.00", EUR)
-
-	cases := []struct {
-		name string
-		spec ProductSearchSpec
-	}{
-		{"下界高于上界", ProductSearchSpec{MinPrice: &high, MaxPrice: &low}},
-		{"币种不一致", ProductSearchSpec{MinPrice: &low, MaxPrice: &eur}},
-		{"条数为负", ProductSearchSpec{Limit: -1}},
+func TestProductHasAvailableSKU(t *testing.T) {
+	p := Product{
+		SKUs: []SKU{
+			{ID: "P-S1", Stock: 0},
+			{ID: "P-S2", Stock: 5},
+		},
+	}
+	if !p.HasAvailableSKU() {
+		t.Error("HasAvailableSKU() = false, want true")
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := tc.spec.Validate(); !errors.Is(err, ErrInvalidSearchSpec) {
-				t.Errorf("应返回 ErrInvalidSearchSpec，得到 %v", err)
-			}
-		})
+	p2 := Product{
+		SKUs: []SKU{
+			{ID: "P-S1", Stock: 0},
+			{ID: "P-S2", Stock: 0},
+		},
+	}
+	if p2.HasAvailableSKU() {
+		t.Error("HasAvailableSKU() = true, want false")
 	}
 }
 
-func TestProductSearchSpecZeroValueIsValid(t *testing.T) {
-	var spec ProductSearchSpec
-	if err := spec.Validate(); err != nil {
-		t.Errorf("零值检索条件应合法，得到 %v", err)
+func TestProductSearchableText(t *testing.T) {
+	p := Product{
+		Brand:       "AudioTech",
+		Title:       "无线耳机",
+		Category:    "数码配件",
+		Description: "蓝牙降噪",
+		SKUs: []SKU{
+			{ID: "P-S1", Spec: "黑色"},
+		},
 	}
-	if got := spec.Normalize().Limit; got != DefaultSearchLimit {
-		t.Errorf("零值归一后 Limit = %d，期望 %d", got, DefaultSearchLimit)
+	text := p.SearchableText()
+	expected := "AudioTech 无线耳机 数码配件 蓝牙降噪 黑色"
+	if text != expected {
+		t.Errorf("SearchableText() = %q, want %q", text, expected)
+	}
+}
+
+func TestSKUToSKUInfo(t *testing.T) {
+	s := SKU{
+		ID:     "P-S1",
+		Spec:   "黑色",
+		Price:  MustMoney("299.00", CNY),
+		Stock:  15,
+	}
+	info := s.ToSKUInfo()
+	if info.SKUID != "P-S1" {
+		t.Errorf("SKUID = %s, want P-S1", info.SKUID)
+	}
+	if info.Spec != "黑色" {
+		t.Errorf("Spec = %s, want 黑色", info.Spec)
+	}
+	if info.PriceMajor != 299.00 {
+		t.Errorf("PriceMajor = %f, want 299.00", info.PriceMajor)
+	}
+	if info.Currency != "CNY" {
+		t.Errorf("Currency = %s, want CNY", info.Currency)
+	}
+	if info.Stock != 15 {
+		t.Errorf("Stock = %d, want 15", info.Stock)
 	}
 }
