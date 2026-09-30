@@ -1,0 +1,9 @@
+# 前端本地忽略（与根 .gitignore 互补）
+node_modules/
+dist/
+coverage/
+.playwright/
+test-results/
+*.log
+.DS_Store
+*.tsbuildinfo

@@ -1,0 +1,9 @@
+/* 基础样式：后端 step 会迭代加 */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: #222;
+  background: #fafafa;
+}
+#root { min-height: 100vh; }
