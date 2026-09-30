@@ -172,3 +172,108 @@ section h1 {
 .timeline .kind-run_error    { background: #fff0f6; color: #c41d7f; }
 .timeline .kind-a2ui         { background: #f9f0ff; color: #722ed1; }
 .timeline .kind-confirm_decided { background: #fff7e6; color: #d46b08; }
+
+.timeline .redact-badge {
+  margin-left: 8px;
+  background: #fff0f6;
+  color: #c41d7f;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+/* 可观测三件套面板 */
+.cost-banner {
+  background: #fff7e6;
+  border: 1px solid #ffd591;
+  padding: 8px 12px;
+  border-radius: 4px;
+  color: #d46b08;
+}
+
+.cost-cards {
+  display: flex;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.cost-card {
+  flex: 1;
+  background: #fff;
+  padding: 12px 16px;
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.cost-card h3 {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  color: #888;
+}
+
+.cost-card p {
+  margin: 0;
+  font-size: 20px;
+}
+
+.cost-chart, .cost-table {
+  margin-top: 16px;
+  background: #fff;
+  padding: 12px;
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.cost-table, .diff-table, .ab-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+}
+
+.cost-table th, .cost-table td,
+.diff-table th, .diff-table td,
+.ab-table th, .ab-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.cost-table th, .diff-table th, .ab-table th {
+  background: #fafafa;
+  font-weight: 600;
+  font-size: 13px;
+  color: #555;
+}
+
+.diff-badges {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.badge {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.badge-added    { background: #f6ffed; color: #389e0d; }
+.badge-removed  { background: #fff0f6; color: #c41d7f; }
+.badge-changed  { background: #fff7e6; color: #d46b08; }
+.badge-unchanged{ background: #f0f0f0; color: #555; }
+
+.diff-row.diff-added    td:nth-child(2) { color: #389e0d; }
+.diff-row.diff-removed  td:nth-child(2) { color: #c41d7f; }
+.diff-row.diff-changed  td:nth-child(2) { color: #d46b08; }
+
+.ab-gray-card,
+.metrics-gray-card,
+.a2ui-gray-card {
+  background: #f5f5f5;
+  border: 1px dashed #aaa;
+  padding: 16px 20px;
+  border-radius: 4px;
+  color: #555;
+}
+
+.ab-note { font-size: 12px; margin-top: 8px; }

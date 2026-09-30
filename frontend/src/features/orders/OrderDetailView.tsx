@@ -1,60 +1,22 @@
 // 订单详情视图。
 //
 // 数据源：
-//   - GET /observability/runs/{runId}/events?from=0&limit=200 → 时间线
-//   - GET /observability/runs/{runId}/cost                    → 成本摘要
+//   - GET /observability/runs/{runId}/events?from=0&limit=200 → ReplayView
+//   - GET /observability/runs/{runId}/cost                    → CostView
+//   - 可选 DiffView（baseline/against 由 URL ?against= 传入）
 //
-// Step 3 仅做基础数据接入与时间线渲染；Step 5 把 ReplayView / DiffView /
-// CostView / ABView / MetricsGrayCard 拆为独立子组件并补全图表。
+// Step 5 起把 ReplayView / CostView / DiffView 拆为独立子组件并接入图表。
 
-import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { ApiError, defaultApi } from '@/lib/api/client';
-import type { CostSummary } from '@/types/api';
-import type { RunEvent } from '@/types/agui';
-
-interface ReplayResponse {
-  run_id: string;
-  events: RunEvent[];
-  total_seq: number;
-  has_more: boolean;
-}
+import { useParams, useSearchParams } from 'react-router-dom';
+import { ReplayView } from '@/features/observability/ReplayView';
+import { CostView } from '@/features/observability/CostView';
+import { DiffView } from '@/features/observability/DiffView';
+import { MetricsGrayCard } from '@/features/observability/MetricsGrayCard';
 
 export function OrderDetailView() {
   const { runId } = useParams<{ runId: string }>();
-  const [events, setEvents] = useState<RunEvent[] | null>(null);
-  const [cost, setCost] = useState<CostSummary | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!runId) return;
-    let alive = true;
-    const api = defaultApi();
-    Promise.all([
-      api
-        .get<ReplayResponse>(`/observability/runs/${encodeURIComponent(runId)}/events`, { from: 0, limit: 200 })
-        .catch((e: unknown) => {
-          if (e instanceof ApiError) throw new Error(`events ${e.status}: ${e.body}`);
-          throw e;
-        }),
-      api.get<CostSummary>(`/observability/runs/${encodeURIComponent(runId)}/cost`).catch((e: unknown) => {
-        if (e instanceof ApiError && e.status === 404) return null;
-        throw e;
-      }),
-    ])
-      .then(([replay, costData]) => {
-        if (!alive) return;
-        setEvents(replay.events);
-        setCost(costData);
-      })
-      .catch((e: unknown) => {
-        if (!alive) return;
-        setErr(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      alive = false;
-    };
-  }, [runId]);
+  const [searchParams] = useSearchParams();
+  const against = searchParams.get('against') ?? '';
 
   if (!runId) {
     return (
@@ -64,55 +26,32 @@ export function OrderDetailView() {
       </section>
     );
   }
-  if (err) {
-    return (
-      <section>
-        <h1>订单详情</h1>
-        <p>runId: {runId}</p>
-        <p className="error">加载失败：{err}</p>
-      </section>
-    );
-  }
-  if (events === null) {
-    return (
-      <section>
-        <h1>订单详情</h1>
-        <p>runId: {runId}</p>
-        <p>加载中…</p>
-      </section>
-    );
-  }
 
   return (
     <section>
       <h1>订单详情</h1>
       <p>runId: {runId}</p>
 
-      <section className="cost-summary">
+      <section className="cost-section">
         <h2>成本</h2>
-        {cost === null ? (
-          <p>成本数据未挂载</p>
-        ) : (
-          <ul>
-            <li>总成本：{cost.total_cost_minor} {cost.currency}</li>
-            <li>未定价调用：{cost.unpriced_count}</li>
-            <li>总调用数：{cost.total_calls}</li>
-            <li>tokens: in={cost.tokens_in} / out={cost.tokens_out} / cached={cost.tokens_cached} / reasoning={cost.tokens_reasoning}</li>
-          </ul>
-        )}
+        <CostView runId={runId} />
       </section>
 
-      <section className="timeline">
-        <h2>事件时间线（共 {events.length} 条）</h2>
-        <ol>
-          {events.map((ev) => (
-            <li key={`${ev.run_id}:${ev.seq}`}>
-              <span className="seq">[{ev.seq}]</span>{' '}
-              <span className={`kind kind-${ev.kind}`}>{ev.kind}</span>{' '}
-              {ev.agent ? <span className="agent">@ {ev.agent}</span> : null}
-            </li>
-          ))}
-        </ol>
+      {against !== '' && against !== runId ? (
+        <section className="diff-section">
+          <h2>对比 {against}</h2>
+          <DiffView baselineRunId={runId} againstRunId={against} />
+        </section>
+      ) : null}
+
+      <section className="replay-section">
+        <h2>事件时间线</h2>
+        <ReplayView runId={runId} />
+      </section>
+
+      <section className="metrics-section">
+        <h2>观测通道</h2>
+        <MetricsGrayCard />
       </section>
     </section>
   );

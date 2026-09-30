@@ -33,18 +33,24 @@ export class ApiClient {
   }
 
   async get<T>(path: string, query?: Record<string, string | number | undefined>): Promise<T> {
-    const url = new URL(path, this.baseUrl);
+    const url = this.resolveUrl(path, query);
+    return this.request<T>('GET', url);
+  }
+
+  async post<T>(path: string, body?: unknown): Promise<T> {
+    const url = this.resolveUrl(path);
+    return this.request<T>('POST', url, body);
+  }
+
+  private resolveUrl(path: string, query?: Record<string, string | number | undefined>): URL {
+    // baseUrl 为空时直接拿 path（dev proxy 模式下相对路径生效；测试时 jsdom 也走相对解析）。
+    const url = this.baseUrl === '' ? new URL(path, window.location.href) : new URL(path, this.baseUrl);
     if (query) {
       for (const [k, v] of Object.entries(query)) {
         if (v !== undefined) url.searchParams.set(k, String(v));
       }
     }
-    return this.request<T>('GET', url);
-  }
-
-  async post<T>(path: string, body?: unknown): Promise<T> {
-    const url = new URL(path, this.baseUrl);
-    return this.request<T>('POST', url, body);
+    return url;
   }
 
   private async request<T>(method: string, url: URL, body?: unknown): Promise<T> {
@@ -67,7 +73,6 @@ export class ApiClient {
       const text = await safeRead(res);
       throw new ApiError(res.status, text);
     }
-    // SSE 等流式响应调用方自己拿 fetch；本方法只处理 JSON。
     return (await res.json()) as T;
   }
 }
