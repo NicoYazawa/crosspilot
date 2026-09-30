@@ -1,21 +1,30 @@
-// 选购视图（Step 3 占位）。
+// 选购视图（Step 6 接入 useChat + useOptimistic + SSE 客户端）。
 //
-// Step 6 接入 useOptimistic + SSE 流式回复 + A2UI 渲染（Step 4）。
-// 当前仅展示查询输入框与占位提示，方便路由验证。
+// 数据流：
+//   1. 用户输入 → send(text)
+//   2. useOptimistic 立即把 user message 上屏（< 16ms 上屏延迟，G1）
+//   3. fetch POST /agui/runs → run_id
+//   4. SSE 客户端订阅 /agui/runs/{id}/events
+//   5. onEvent 把 model_turn / a2ui 落到 committed，渲染
 
 import { useState, type FormEvent } from 'react';
+import { useChat } from './useChat';
+import { A2UIRenderer } from '@/features/a2ui/Renderer';
 
 export function ShopView() {
   const [query, setQuery] = useState('');
-  const [pending, setPending] = useState(false);
+  const [a2uiMessages] = useState<unknown[]>([]);
+  const { messages, isPending, error, send, stop } = useChat({
+    baseUrl: '',
+    onMetric: (name, value) => {
+      window.console.debug(`[metric] ${name}=${value.toFixed(2)}ms`);
+    },
+  });
 
   const onSubmit = (e: FormEvent<HTMLFormElement>): void => {
     e.preventDefault();
     if (query.trim() === '') return;
-    setPending(true);
-    // Step 6：fetch POST /agui/runs + 启动 SSE；当前仅打印。
-    window.console.log('[shop] submit query (placeholder):', query);
-    setPending(false);
+    void send(query.trim());
     setQuery('');
   };
 
@@ -29,13 +38,37 @@ export function ShopView() {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="描述你的需求，例如：找一款防水登山包"
           aria-label="查询"
-          disabled={pending}
+          disabled={isPending}
         />
-        <button type="submit" disabled={pending || query.trim() === ''}>
-          发送
+        <button type="submit" disabled={isPending || query.trim() === ''}>
+          {isPending ? '提交中…' : '发送'}
         </button>
+        <button type="button" onClick={stop} disabled={!isPending}>停止</button>
       </form>
-      <p className="muted">Step 3 占位 — Step 6 接入 useOptimistic + SSE 流式</p>
+
+      {error ? <p className="error">{error}</p> : null}
+
+      <div className="chat-history">
+        {messages.length === 0 ? (
+          <p className="muted">尚无消息</p>
+        ) : (
+          <ul>
+            {messages.map((m) => (
+              <li key={m.id} className={`chat-msg chat-${m.role}${m.pending ? ' pending' : ''}`}>
+                <strong>{m.role === 'user' ? '我' : 'Agent'}:</strong> {m.content}
+                {m.pending ? <span className="muted"> (发送中…)</span> : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="a2ui-render">
+        <A2UIRenderer
+          messages={a2uiMessages}
+          onError={(e) => window.console.error('[a2ui]', e.message)}
+        />
+      </div>
     </section>
   );
 }
