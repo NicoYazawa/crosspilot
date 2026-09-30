@@ -29,23 +29,25 @@ const (
 //
 // Baseline 与 Against 都是原始事件（去重后的），Kind 为差异类型，Reason
 // 是人类可读的描述。
+//
+// 注：P6 起统一 snake_case JSON tag。
 type DiffItem struct {
-	Seq      int64
-	Kind     DiffKind
-	Baseline *runevent.Event
-	Against  *runevent.Event
-	Reason   string
+	Seq      int64           `json:"seq"`
+	Kind     DiffKind        `json:"kind"`
+	Baseline *runevent.Event `json:"baseline"`
+	Against  *runevent.Event `json:"against"`
+	Reason   string          `json:"reason"`
 }
 
 // DiffResult 是两条 run 的对比结果。
 type DiffResult struct {
-	BaselineRunID string
-	AgainstRunID  string
-	Items         []DiffItem
-	Added         int
-	Removed       int
-	Changed       int
-	Unchanged     int
+	BaselineRunID string     `json:"baseline_run_id"`
+	AgainstRunID  string     `json:"against_run_id"`
+	Items         []DiffItem `json:"items"`
+	Added         int        `json:"added"`
+	Removed       int        `json:"removed"`
+	Changed       int        `json:"changed"`
+	Unchanged     int        `json:"unchanged"`
 }
 
 // Diff 对比两条 run 的事件序列。

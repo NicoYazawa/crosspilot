@@ -42,18 +42,20 @@ type CostStore interface {
 // CostEvent 是单次模型调用的成本记录。
 //
 // 字段都从 observability.cost 表出，币种以最小单位计（F3 留待外部资源验证）。
+//
+// 注：P6 起统一 snake_case JSON tag。
 type CostEvent struct {
-	EventID         string
-	RunID           string
-	Provider        string
-	Model           string
-	TokensIn        int64
-	TokensOut       int64
-	TokensCached    int64
-	TokensReasoning int64
-	CostMinor       int64
-	Currency        string
-	Unpriced        bool
+	EventID         string `json:"event_id"`
+	RunID           string `json:"run_id"`
+	Provider        string `json:"provider"`
+	Model           string `json:"model"`
+	TokensIn        int64  `json:"tokens_in"`
+	TokensOut       int64  `json:"tokens_out"`
+	TokensCached    int64  `json:"tokens_cached"`
+	TokensReasoning int64  `json:"tokens_reasoning"`
+	CostMinor       int64  `json:"cost_minor"`
+	Currency        string `json:"currency"`
+	Unpriced        bool   `json:"unpriced"` // F4 闸门：true 表示未命中价格表
 }
 
 // ExperimentStore 是 A/B 实验元数据端口。
@@ -72,13 +74,15 @@ type ExperimentStore interface {
 //
 // Calls / LatencyP95 / CostTotal / UnpricedCount 是 F10「与 token 无关」的核心
 // 指标——即便跨协议族 token 口径不同，这四条仍可比。
+//
+// 注：P6 起统一 snake_case JSON tag。Judge 评分（F8 缺口）不暴露字段。
 type ArmSummary struct {
-	Arm            string
-	Calls          int64
-	LatencyP95Ms   int64
-	CostTotalMinor int64
-	Currency       string
-	UnpricedCount  int64
+	Arm            string `json:"arm"`
+	Calls          int64  `json:"calls"`
+	LatencyP95Ms   int64  `json:"latency_p95_ms"`
+	CostTotalMinor int64  `json:"cost_total_minor"`
+	Currency       string `json:"currency"`
+	UnpricedCount  int64  `json:"unpriced_count"`
 }
 
 // Clock 提供当前时间；为 nil 时使用 time.Now。

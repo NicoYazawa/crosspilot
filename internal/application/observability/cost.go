@@ -8,31 +8,34 @@ package observability
 import "context"
 
 // CostSummary 是单 run 的成本面板输入。
+//
+// 注：P6 起所有 JSON 字段统一 snake_case（与 replayResponse / MetricsSnapshot 对齐）。
+// Go 字段名保持不变以保护 Go 调用方语义；JSON tag 是给前端的契约。
 type CostSummary struct {
-	RunID          string
-	TotalCostMinor int64             // 总成本（已定价部分，按主币种累加）
-	Currency       string            // 主币种（取首条 CostEvent 的币种）
-	UnpricedCount  int64             // 未命中价格表的调用次数
-	TotalCalls     int64             // 总调用次数
-	TokensIn       int64
-	TokensOut      int64
-	TokensCached   int64
-	TokensReason   int64
-	ByProvider     []ProviderBreakdown // 按 provider 拆开
+	RunID          string             `json:"run_id"`
+	TotalCostMinor int64              `json:"total_cost_minor"` // 总成本（已定价部分，按主币种累加）
+	Currency       string             `json:"currency"`         // 主币种（取首条 CostEvent 的币种）
+	UnpricedCount  int64              `json:"unpriced_count"`   // 未命中价格表的调用次数（F4 闸门）
+	TotalCalls     int64              `json:"total_calls"`      // 总调用次数
+	TokensIn       int64              `json:"tokens_in"`
+	TokensOut      int64              `json:"tokens_out"`
+	TokensCached   int64              `json:"tokens_cached"`
+	TokensReason   int64              `json:"tokens_reasoning"`
+	ByProvider     []ProviderBreakdown `json:"by_provider"` // 按 provider 拆开
 }
 
 // ProviderBreakdown 是按 provider 拆分的成本小计。
 //
 // 用 slice 而非 map 是为了 JSON 序列化稳定——map 序列化顺序未定义。
 type ProviderBreakdown struct {
-	Provider       string
-	Model          string
-	Calls          int64
-	CostMinor      int64
-	Currency       string
-	UnpricedCount  int64
-	TokensIn       int64
-	TokensOut      int64
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	Calls         int64  `json:"calls"`
+	CostMinor     int64  `json:"cost_minor"`
+	Currency      string `json:"currency"`
+	UnpricedCount int64  `json:"unpriced_count"`
+	TokensIn      int64  `json:"tokens_in"`
+	TokensOut     int64  `json:"tokens_out"`
 }
 
 // CostOfRun 聚合某 run 的成本数据。
