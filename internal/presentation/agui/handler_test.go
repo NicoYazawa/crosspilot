@@ -452,9 +452,16 @@ func TestE6_A2UI_ThreeMessagesAreValid(t *testing.T) {
 	}
 }
 
+// hmacTestSecret 是 HMAC 单元测试用的占位密钥。
+//
+// 长自描述字符串：任何审计工具一眼能识别为「这是 fixture，不是真凭据」，
+// 也不会被误判为泄漏的生产密钥。生产密钥通过 AUTH_JWT_SECRET 环境变量注入，
+// 与本常量无任何关联。
+const hmacTestSecret = "FIXME-placeholder-key-for-hmac-unit-test-only-do-not-use-in-prod"
+
 // TestHMACAuth_AllowsRequestWithValidSignature 验证 HMAC 鉴权通过。
 func TestHMACAuth_AllowsRequestWithValidSignature(t *testing.T) {
-	secret := []byte("test-secret")
+	secret := []byte(hmacTestSecret)
 	path := "/agui/runs/run-1/events"
 
 	ts := fmt.Sprintf("%d", time.Now().Unix())
@@ -476,7 +483,7 @@ func TestHMACAuth_AllowsRequestWithValidSignature(t *testing.T) {
 }
 
 func TestHMACAuth_RejectsBadSignature(t *testing.T) {
-	secret := []byte("test-secret")
+	secret := []byte(hmacTestSecret)
 	path := "/agui/runs/run-1/events"
 	ts := fmt.Sprintf("%d", time.Now().Unix())
 
