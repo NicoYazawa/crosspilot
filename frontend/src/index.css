@@ -1,9 +1,174 @@
-/* 基础样式：后端 step 会迭代加 */
+/* 基础样式：Step 3 起逐步加业务样式。
+ * Step 5/6 还会迭代；先做到布局 + 表格 + 表单可看。
+ */
+
 * { box-sizing: border-box; }
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   color: #222;
   background: #fafafa;
 }
+
 #root { min-height: 100vh; }
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  padding: 12px 24px;
+  background: #fff;
+  border-bottom: 1px solid #e5e5e5;
+}
+
+.app-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.app-nav {
+  display: flex;
+  gap: 16px;
+}
+
+.app-nav-link {
+  color: #555;
+  text-decoration: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.app-nav-link:hover {
+  background: #f0f0f0;
+}
+
+.app-nav-link.active {
+  color: #1677ff;
+  background: #e6f4ff;
+}
+
+.app-main {
+  flex: 1;
+  padding: 24px;
+  max-width: 1100px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+section h1 {
+  margin-top: 0;
+}
+
+.muted {
+  color: #888;
+  font-size: 14px;
+}
+
+.error {
+  color: #c41d7f;
+  background: #fff0f6;
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+
+/* 表单 */
+.shop-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.shop-form input[type='text'] {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.shop-form button {
+  padding: 8px 16px;
+  background: #1677ff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.shop-form button:disabled {
+  background: #aaa;
+  cursor: not-allowed;
+}
+
+/* 表格 */
+.orders-table,
+.history-table,
+.prefs-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.orders-table th,
+.orders-table td,
+.history-table th,
+.history-table td,
+.prefs-table th,
+.prefs-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.orders-table th,
+.history-table th,
+.prefs-table th {
+  background: #fafafa;
+  font-weight: 600;
+  font-size: 13px;
+  color: #555;
+}
+
+/* 时间线 */
+.timeline ol {
+  padding-left: 0;
+  list-style: none;
+}
+
+.timeline li {
+  padding: 6px 8px;
+  border-bottom: 1px solid #f0f0f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+.timeline .seq {
+  color: #888;
+  margin-right: 6px;
+}
+
+.timeline .kind {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #e6f4ff;
+  color: #1677ff;
+  font-size: 12px;
+  margin-right: 6px;
+}
+
+.timeline .kind-run_finished { background: #f6ffed; color: #389e0d; }
+.timeline .kind-run_error    { background: #fff0f6; color: #c41d7f; }
+.timeline .kind-a2ui         { background: #f9f0ff; color: #722ed1; }
+.timeline .kind-confirm_decided { background: #fff7e6; color: #d46b08; }
