@@ -6,36 +6,35 @@ import (
 )
 
 // Status 是订单的状态。
+//
+// 取值是大写英文单词而非小写：线上契约里它就是这几个裸字符串，前端与既有的
+// 评测数据都按大写比较。改成小写不会让任何测试失败，却会静默改变对外契约。
 type Status string
 
 const (
-	// StatusPending 已下单，等待卖家确认。订单创建后即处于此状态。
-	StatusPending Status = "pending"
+	// StatusDraft 已建单，尚未确认。订单创建后即处于此状态。
+	StatusDraft Status = "DRAFT"
 
-	// StatusConfirmed 卖家已确认，交易成立。终态。
-	StatusConfirmed Status = "confirmed"
+	// StatusConfirmed 交易成立。可以取消，但不能回到草稿。
+	StatusConfirmed Status = "CONFIRMED"
 
-	// StatusCancelled 买家或卖家主动取消。终态。
-	StatusCancelled Status = "cancelled"
-
-	// StatusExpired 超时未确认，自动关闭。终态。
-	StatusExpired Status = "expired"
+	// StatusCancelled 已取消，库存已回补。终态。
+	StatusCancelled Status = "CANCELLED"
 )
 
 // validStatuses 是全量合法状态，供校验与测试遍历使用。
 var validStatuses = []Status{
-	StatusPending,
+	StatusDraft,
 	StatusConfirmed,
 	StatusCancelled,
-	StatusExpired,
 }
 
-// transitions 描述状态机的合法迁移：pending 可以走向三个终态，终态无出边。
+// transitions 描述状态机的合法迁移：草稿可以确认或直接取消，
+// 已确认只能取消，取消是终态。
 var transitions = map[Status][]Status{
-	StatusPending:   {StatusConfirmed, StatusCancelled, StatusExpired},
-	StatusConfirmed: nil,
+	StatusDraft:     {StatusConfirmed, StatusCancelled},
+	StatusConfirmed: {StatusCancelled},
 	StatusCancelled: nil,
-	StatusExpired:   nil,
 }
 
 // AllStatuses 返回全部合法状态的副本。
@@ -76,6 +75,9 @@ func (s Status) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON 实现 json.Unmarshaler，拒绝读入未知状态。
+//
+// 只接受大写取值：把 "confirmed" 也当合法会让契约悄悄放宽，
+// 而放宽之后再收紧就是破坏性变更。
 func (s *Status) UnmarshalJSON(data []byte) error {
 	var raw string
 	if err := json.Unmarshal(data, &raw); err != nil {

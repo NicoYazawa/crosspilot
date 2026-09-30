@@ -30,4 +30,7 @@ var (
 
 	// ErrStaleStatus 表示订单当前状态与预期不符，迁移被拒绝。
 	ErrStaleStatus = errors.New("order: 状态已变更")
+
+	// ErrCancelReasonRequired 表示取消订单时没有给出原因。
+	ErrCancelReasonRequired = errors.New("order: 取消必须给出原因")
 )

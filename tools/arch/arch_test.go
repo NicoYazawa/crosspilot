@@ -63,14 +63,32 @@ var components = []component{
 		vendorDeps:  []string{"go.opentelemetry.io/otel"},
 	},
 	{
-		name:        "infra",
-		dirs:        []string{"internal/infra"},
-		projectDeps: []string{"internal/domain", "internal/config", "migrations"},
+		name: "infra",
+		dirs: []string{"internal/infra"},
+		projectDeps: []string{
+			"internal/domain", "internal/config", "migrations",
+			// pgtest 是 Postgres 的测试脚手架（起容器、建库、跑迁移），
+			// 只被同层的测试文件导入。它是这一个适配器自己的测试设施，
+			// 因此就近放在它服务的包下面，而不是提成一个上层公共包——
+			// 提上去反而会让 application/presentation 也能依赖它。
+			"internal/infra/persistence/pg/pgtest",
+		},
 		vendorDeps: []string{
 			"github.com/jackc/pgx",
 			"github.com/redis/go-redis",
 			"go.opentelemetry.io/otel",
+			// 集成测试要起真实 Postgres。这条依赖只出现在测试文件里，
+			// 但测试文件同样计入依赖方向检查——测试里绕开分层去依赖内层
+			// 一样是耦合，第三方依赖同理。
+			"github.com/testcontainers/testcontainers-go",
 		},
+	},
+	{
+		// 应用层是用例编排：它认识领域模型，但不认识数据库与 HTTP。
+		// 持久化细节通过领域端口注入，因此这里只允许依赖 internal/domain。
+		name:        "application",
+		dirs:        []string{"internal/application"},
+		projectDeps: []string{"internal/domain"},
 	},
 	{
 		name:        "presentation",
@@ -121,6 +139,14 @@ func TestDependencyDirection(t *testing.T) {
 		}
 		seenComponents[owner.name] = true
 
+		// 同目录的外部测试包（package foo_test）会导入它正在测试的那个包。
+		// 这不是跨层依赖——它就是同一个包，自己没有「依赖自己」这回事。
+		// 不放行这一条，任何带集成测试的包都会被判违规，规则就沦为噪音，
+		// 而一条总在报错的规则最终的命运是被关掉。
+		if isOwnPackage(ref.file, ref.pkg) {
+			continue
+		}
+
 		if !allowed(owner, ref.pkg) {
 			violations = append(violations, fmt.Sprintf(
 				"%s:%d %s 组件不允许依赖 %s", ref.file, ref.line, owner.name, ref.pkg))
@@ -143,6 +169,12 @@ func TestDependencyDirection(t *testing.T) {
 
 // minExpectedFiles 是扫描文件数的下限，用来发现「扫描悄悄失败」。
 const minExpectedFiles = 15
+
+// isOwnPackage 报告一条导入是否为「文件所在目录的那个包」。
+func isOwnPackage(file, pkg string) bool {
+	own := strings.TrimSuffix(filepath.ToSlash(filepath.Dir(file)), "/")
+	return pkg == modulePrefix+own || pkg == rootPrefix+"/"+own
+}
 
 func allowed(c component, pkg string) bool {
 	if isStdlib(pkg) {

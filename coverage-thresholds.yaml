@@ -32,6 +32,15 @@ rules:
     min: 90
     reason: 配置读错会在生产静默生效，加载与校验路径要测全
 
+  - prefix: github.com/NicoYazawa/crosspilot/internal/infra/persistence/pg
+    min: 70
+    reason: >
+      交易账本的事务体（决议的各分支、错误映射、查询装配）由集成测试在真实
+      Postgres 上验证。这些测试跑起来比单元测试慢一个数量级，因此做不到
+      domain 层那样的覆盖密度。70% 的门槛守住两条底线：新增的账本逻辑必须
+      带集成测试，且不允许出现整块未验证的写入路径。低于该值请补测试，
+      不要下调阈值——阈值等同于验收标准。
+
   - prefix: github.com/NicoYazawa/crosspilot/internal/infra/
     min: 80
     reason: 纯函数部分应当测到；连真实服务的分支由集成测试覆盖
@@ -50,3 +59,10 @@ exclusions:
 
   - prefix: github.com/NicoYazawa/crosspilot/internal/infra/postgres/
     reason: 迁移执行器与连接池的核心路径必须连真实 Postgres 才能跑（由 /health 的端到端验证与集成测试覆盖），此处不设槛
+
+  - prefix: github.com/NicoYazawa/crosspilot/internal/infra/persistence/pg/pgtest
+    reason: >
+      测试脚手架本身：起容器、建库、跑迁移。它的被测对象是 Docker 与 Postgres，
+      而不是它自己的分支。纯函数部分（库名规范化、哈希、DSN 改写）已有单元测试；
+      容器交互部分无法在单元测试里验证。为它设阈值只会逼人写不 assert 的测试
+      来凑数，那比不测更糟。
