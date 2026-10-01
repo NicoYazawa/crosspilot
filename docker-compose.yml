@@ -1,7 +1,11 @@
-# CrossPilot 本地依赖
+# CrossPilot 五容器本地部署
 #
-# 敏感配置透传宿主机环境变量，缺失时直接报错，避免明文落盘。
-# 镜像版本与宿主机本地已有版本对齐，避免额外下载。
+# 镜像版本全部选本地已有的，避免拉取。
+# 敏感配置透传宿主机环境变量，缺失时直接报错（不落盘）。
+#
+# 启动: docker compose up -d --build
+# 健康: curl http://localhost:8000/health
+# 停止: docker compose down
 
 name: crosspilot
 
@@ -11,12 +15,10 @@ services:
     container_name: crosspilot-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-crosspilot}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?必须设置 POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_DB: ${POSTGRES_DB:-crosspilot}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
-    # Postgres 18 的 PGDATA 默认在 /var/lib/postgresql/18/docker，
-    # 挂载点必须是 /var/lib/postgresql，挂 .../data 会静默不持久化。
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
@@ -50,8 +52,85 @@ services:
       - "${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - qdrant-data:/qdrant/storage
-    # 不设 healthcheck：镜像内没有 curl/wget，任何基于自带二进制的探针都会
-    # 「总是通过」，比没有探针更糟。就绪性由服务端 /health 自行探测。
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CGO_ENABLED: "0"
+    image: crosspilot-app:latest
+    container_name: crosspilot-app
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      # HTTP 服务地址
+      CROSSPILOT_HTTP_ADDR: ":8000"
+      # Postgres（docker compose 服务名）
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-crosspilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_DB: ${POSTGRES_DB:-crosspilot}
+      POSTGRES_SSLMODE: disable
+      # Redis
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # Qdrant（config.go 硬编码 6334）
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6334
+      # LLM Provider
+      LLM_DEFAULT_PROVIDER: ${LLM_DEFAULT_PROVIDER:-qwen}
+      # Qwen
+      QWEN_API_KEY: ${QWEN_API_KEY:-${LLM_API_KEY}:-必须设置 LLM_API_KEY 或 QWEN_API_KEY}
+      QWEN_BASE_URL: ${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      QWEN_MODEL: ${QWEN_MODEL:-qwen-plus}
+      # MiniMax
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+      MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-https://api.minimax.chat/v1}
+      MINIMAX_MODEL: ${MINIMAX_MODEL:-MiniMax-M2}
+      # DeepSeek
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      # Anthropic
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+      # 可观测性（可选）
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: crosspilot-api
+      # CORS（前端开发服务器）
+      CROSSPILOT_HTTP_CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:5173}"
+      # JWT（必填；运行时检查，空字符串会触发 server 报错）
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 10s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: crosspilot-frontend:latest
+    container_name: crosspilot-frontend
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      - app
     restart: unless-stopped
 
 volumes:

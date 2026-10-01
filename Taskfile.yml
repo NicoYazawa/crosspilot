@@ -206,3 +206,63 @@ tasks:
       - task: frontend:lint
       - task: frontend:test
       - task: frontend:build
+
+  # ---------------------------------------------------------------------------
+  # P8 部署
+  # ---------------------------------------------------------------------------
+
+  # I1: 一键起全栈（app + frontend + postgres + redis + qdrant）
+  deploy:up:
+    desc: 启动全栈容器（--build 重建镜像）
+    cmds:
+      - docker compose up -d --build
+
+  # I1: 全栈健康检查
+  deploy:health:
+    desc: 检查 /health 是否通过
+    cmds:
+      - "curl -sf http://localhost:8000/health || (echo 'health failed' && exit 1)"
+
+  # I2: 零镜像拉取验证（本地已有镜像）
+  deploy:pull-free:
+    desc: 验证启动不拉取镜像
+    cmds:
+      - docker compose pull
+
+  # I5: 验证无明文密钥（镜像中零密钥）
+  deploy:secret-scan:
+    desc: 扫描镜像中是否存在明文密钥
+    cmds:
+      - "docker run --rm -i alpine sh -c 'apk add grep && grep -r -E \"(API_KEY|SECRET|PASSWORD)\" /app' {{.BIN_NAME}} || true"
+
+  # I8: 数据持久化（down 后 up，数据仍在）
+  deploy:volume:
+    desc: 验证数据卷持久化
+    cmds:
+      - docker compose down
+      - docker compose up -d
+      - task: deploy:health
+
+  # 清理全栈
+  deploy:down:
+    desc: 停止全栈容器（保留数据卷）
+    cmds:
+      - docker compose down
+
+  deploy:reset:
+    desc: 停止并清除数据卷
+    cmds:
+      - docker compose down -v
+
+  # ---------------------------------------------------------------------------
+  # 全量 CI 检查
+  # ---------------------------------------------------------------------------
+
+  check:
+    desc: Go 完整校验（fmt + lint + arch + test + cover:gate）
+    cmds:
+      - task: fmt:check
+      - task: lint
+      - go test ./tools/arch/...
+      - task: test
+      - task: cover:gate
