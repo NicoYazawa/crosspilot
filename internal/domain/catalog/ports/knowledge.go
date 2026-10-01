@@ -6,8 +6,8 @@ import (
 
 // KnowledgeChunk is a single retrieved knowledge fragment.
 type KnowledgeChunk struct {
-	Content string
-	Score   float32
+	Content  string
+	Score    float32
 	Metadata map[string]string
 }
 

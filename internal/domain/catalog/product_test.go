@@ -7,34 +7,34 @@ import (
 
 func validProduct() Product {
 	return Product{
-		ID:          "P0001",
-		Title:       "无线降噪耳机",
-		Description: "主动降噪，续航 30 小时",
-		Category:    "数码配件",
-		Brand:       "AudioTech",
+		ID:            "P0001",
+		Title:         "无线降噪耳机",
+		Description:   "主动降噪，续航 30 小时",
+		Category:      "数码配件",
+		Brand:         "AudioTech",
 		OriginCountry: "CN",
-		InStock:     true,
-		ImageURL:    "https://example.invalid/p-001.png",
-		WeightKg:    0.25,
-		DimensionsCm: map[string]float64{"length": 20, "width": 18, "height": 8},
-		PrimaryPrice: MustMoney("1299.00", CNY),
+		InStock:       true,
+		ImageURL:      "https://example.invalid/p-001.png",
+		WeightKg:      0.25,
+		DimensionsCm:  map[string]float64{"length": 20, "width": 18, "height": 8},
+		PrimaryPrice:  MustMoney("1299.00", CNY),
 		SKUs: []SKU{
 			{ID: "P0001-S1", Spec: "黑色", Price: MustMoney("1299.00", CNY), Stock: 10},
 		},
-		DefaultSKUID: "P0001-S1",
-		ShipsTo:      []string{"CN", "US", "EU"},
-		MaterialTags: []string{"塑料", "金属"},
-		Highlights:   []string{"主动降噪", "30小时续航"},
-		Tags:         []string{"耳机", "降噪"},
-		CanonicalID:  "CANON-P0001",
+		DefaultSKUID:   "P0001-S1",
+		ShipsTo:        []string{"CN", "US", "EU"},
+		MaterialTags:   []string{"塑料", "金属"},
+		Highlights:     []string{"主动降噪", "30小时续航"},
+		Tags:           []string{"耳机", "降噪"},
+		CanonicalID:    "CANON-P0001",
 		SourcePlatform: "PlatformA",
 		RatingSummary:  map[string]float64{"average": 4.6, "review_count": 128},
 		RatingIsLive:   true,
-		UpdatedAt:     "2024-01-01T00:00:00Z",
+		UpdatedAt:      "2024-01-01T00:00:00Z",
 		SourceLanguage: "zh",
 		SourceLocale:   "zh-CN",
 		DataProvenance: "imported",
-		Attributes: map[string]string{"颜色": "黑"},
+		Attributes:     map[string]string{"颜色": "黑"},
 	}
 }
 
@@ -72,7 +72,7 @@ func TestProductPrice(t *testing.T) {
 
 	// 有库存 SKU 时返回有库存的 SKU 价格
 	p2 := Product{
-		ID:   "P2",
+		ID:    "P2",
 		Title: "Test2",
 		SKUs: []SKU{
 			{ID: "P2-S1", Spec: "A", Price: MustMoney("50.00", CNY), Stock: 0},
@@ -163,10 +163,10 @@ func TestProductSearchableText(t *testing.T) {
 
 func TestSKUToSKUInfo(t *testing.T) {
 	s := SKU{
-		ID:     "P-S1",
-		Spec:   "黑色",
-		Price:  MustMoney("299.00", CNY),
-		Stock:  15,
+		ID:    "P-S1",
+		Spec:  "黑色",
+		Price: MustMoney("299.00", CNY),
+		Stock: 15,
 	}
 	info := s.ToSKUInfo()
 	if info.SKUID != "P-S1" {

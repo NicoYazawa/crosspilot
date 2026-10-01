@@ -27,15 +27,15 @@ import (
 type Kind string
 
 const (
-	KindRunStart     Kind = "run_start"
-	KindModelTurn    Kind = "model_turn"
-	KindToolCall     Kind = "tool_call"
-	KindToolResult   Kind = "tool_result"
-	KindRunFinished  Kind = "run_finished"
-	KindRunError     Kind = "run_error"
+	KindRunStart      Kind = "run_start"
+	KindModelTurn     Kind = "model_turn"
+	KindToolCall      Kind = "tool_call"
+	KindToolResult    Kind = "tool_result"
+	KindRunFinished   Kind = "run_finished"
+	KindRunError      Kind = "run_error"
 	KindServerRestart Kind = "server_restart"
-	KindA2UI         Kind = "a2ui"
-	KindHeartbeat    Kind = "heartbeat"
+	KindA2UI          Kind = "a2ui"
+	KindHeartbeat     Kind = "heartbeat"
 )
 
 // Event 是不可变事件记录。

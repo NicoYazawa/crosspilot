@@ -25,9 +25,9 @@ const A2UIVersion = "0.9"
 // 三个选择必须按 createSurface → updateComponents → updateDataModel 顺序发出，
 // 顺序错了前端会拒渲染。
 const (
-	A2UIActionCreateSurface     = "createSurface"
-	A2UIActionUpdateComponents  = "updateComponents"
-	A2UIActionUpdateDataModel   = "updateDataModel"
+	A2UIActionCreateSurface    = "createSurface"
+	A2UIActionUpdateComponents = "updateComponents"
+	A2UIActionUpdateDataModel  = "updateDataModel"
 )
 
 // ShoppingRequirementsPath 是 A2UI 数据模型的根路径。
@@ -52,8 +52,8 @@ type A2UIComponent struct {
 // 同一 Path 下可以挂多份数据：value.data 是数组，按顺序渲染。Value 是完整 v0.9 字段
 // 集合的兼容视图——前端按 schema.list[0].fields 必填值比对。
 type A2UIDataEntry struct {
-	Path  string         `json:"path"`
-	Data  []map[string]any `json:"data"`
+	Path string           `json:"path"`
+	Data []map[string]any `json:"data"`
 }
 
 // ValidateCreateSurface 校验 createSurface 报文。

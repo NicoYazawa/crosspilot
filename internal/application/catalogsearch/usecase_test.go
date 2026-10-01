@@ -106,34 +106,34 @@ func (r *realExchangeRateTable) Convert(from catalog.Money, to catalog.Currency)
 
 func testProduct(id, title, category string, price catalog.Money, skus []catalog.SKU) catalog.Product {
 	return catalog.Product{
-		ID:            id,
-		Title:         title,
-		Description:   "test description",
-		Category:      category,
-		Brand:         "TestBrand",
-		OriginCountry: "CN",
-		InStock:       true,
-		ImageURL:      "https://example.com/img.jpg",
-		ImageKind:     "product",
-		ImageAlt:      "Product image",
-		WeightKg:      0.5,
-		DimensionsCm:  map[string]float64{"length": 10, "width": 5, "height": 3},
-		PrimaryPrice:  price,
-		SKUs:          skus,
-		DefaultSKUID:  "",
-		ShipsTo:       []string{"CN", "US", "EU"},
-		MaterialTags:  []string{"cotton", "organic"},
-		Highlights:    []string{"材质：帆布", "适用场景：户外"},
-		Tags:          []string{"bag", "travel"},
-		CanonicalID:   "CANON-" + id,
+		ID:             id,
+		Title:          title,
+		Description:    "test description",
+		Category:       category,
+		Brand:          "TestBrand",
+		OriginCountry:  "CN",
+		InStock:        true,
+		ImageURL:       "https://example.com/img.jpg",
+		ImageKind:      "product",
+		ImageAlt:       "Product image",
+		WeightKg:       0.5,
+		DimensionsCm:   map[string]float64{"length": 10, "width": 5, "height": 3},
+		PrimaryPrice:   price,
+		SKUs:           skus,
+		DefaultSKUID:   "",
+		ShipsTo:        []string{"CN", "US", "EU"},
+		MaterialTags:   []string{"cotton", "organic"},
+		Highlights:     []string{"材质：帆布", "适用场景：户外"},
+		Tags:           []string{"bag", "travel"},
+		CanonicalID:    "CANON-" + id,
 		SourcePlatform: "TestPlatform",
-		RatingSummary: map[string]float64{"average": 4.5, "review_count": 128},
-		RatingIsLive:  true,
-		UpdatedAt:     "2024-01-01T00:00:00Z",
+		RatingSummary:  map[string]float64{"average": 4.5, "review_count": 128},
+		RatingIsLive:   true,
+		UpdatedAt:      "2024-01-01T00:00:00Z",
 		SourceLanguage: "zh",
 		SourceLocale:   "zh-CN",
 		DataProvenance: "test",
-		Attributes:    map[string]string{"color": "black"},
+		Attributes:     map[string]string{"color": "black"},
 	}
 }
 
@@ -534,7 +534,7 @@ func TestExecuteExtractsIdentifiersFromQuery(t *testing.T) {
 	// Test with explicit ProductID
 	result, err := uc.Execute(context.Background(), catalog.ProductSearchSpec{
 		ProductID:      "P1001",
-		TopK:          10,
+		TopK:           10,
 		TargetCurrency: catalog.USD,
 	})
 	require.NoError(t, err)
@@ -595,7 +595,7 @@ func TestExecuteRepoError(t *testing.T) {
 
 	_, err := uc.Execute(context.Background(), catalog.ProductSearchSpec{
 		ProductID:      "P1001",
-		TopK:          10,
+		TopK:           10,
 		TargetCurrency: catalog.USD,
 	})
 	assert.Error(t, err)
@@ -660,7 +660,7 @@ func TestExecuteCancellation(t *testing.T) {
 	cancel() // Cancel before execution
 	_, err := uc.Execute(ctx, catalog.ProductSearchSpec{
 		ProductID:      "P1001",
-		TopK:          10,
+		TopK:           10,
 		TargetCurrency: catalog.USD,
 	})
 	assert.Error(t, err)
@@ -824,7 +824,7 @@ func TestExecuteMultipleExactIDsWithFilters(t *testing.T) {
 	maxPrice := 300.0
 	result, err := uc.Execute(context.Background(), catalog.ProductSearchSpec{
 		ProductID:      "P1001",
-		TopK:          10,
+		TopK:           10,
 		TargetCurrency: catalog.USD,
 	})
 	require.NoError(t, err)
@@ -985,7 +985,7 @@ func TestExecuteExactIDRecordsRequestedIdentifiers(t *testing.T) {
 	// Use explicit ProductID since regex extraction has issues with Chinese context
 	result, err := uc.Execute(context.Background(), catalog.ProductSearchSpec{
 		ProductID:      "P1001",
-		TopK:          10,
+		TopK:           10,
 		TargetCurrency: catalog.USD,
 	})
 	require.NoError(t, err)

@@ -10,7 +10,7 @@ func CreateOrderToolDef() ToolDef {
 			Type: "object",
 			Properties: map[string]ParameterDef{
 				"items": {
-					Type: "array",
+					Type:        "array",
 					Description: "多商品订单行列表，每项形如 {“product_id”: “P1001”, “sku_id”: “P1001-S1”, “quantity”: 1}；与单商品参数互斥。",
 					Items: &ParameterDef{
 						Type: "object",
@@ -23,7 +23,7 @@ func CreateOrderToolDef() ToolDef {
 					},
 				},
 				"shipping_address": {
-					Type: "object",
+					Type:        "object",
 					Description: "收货地址，形如 {“recipient_name”: “...”, “country”: “CN”, “state”: “...”, “city”: “...”, “address_line”: “...”, “postal_code”: “...”, “phone”: “...”}。",
 					Properties: map[string]ParameterDef{
 						"recipient_name": {Type: "string"},

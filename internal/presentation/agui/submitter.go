@@ -24,7 +24,7 @@ func NewSubmitter(backend RunnerBackend, defaultAgent string) RunSubmitter {
 }
 
 type submitAdapter struct {
-	backend     RunnerBackend
+	backend      RunnerBackend
 	defaultAgent string
 }
 

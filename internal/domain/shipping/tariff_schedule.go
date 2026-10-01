@@ -30,8 +30,8 @@ var _tariffRates = map[string]map[string]decimal.Decimal{
 
 // 目的国免税额度（CNY 分）
 var _deMinimisCNYMinor = map[string]int64{
-	"CN": 5_000_00,   // 5000 元
-	"US": 800 * 710,  // 800 USD * 7.10
+	"CN": 5_000_00,  // 5000 元
+	"US": 800 * 710, // 800 USD * 7.10
 	"EU": 150 * 780,
 	"JP": 10_000 * 5, // 简化口径
 	"SG": 400 * 530,

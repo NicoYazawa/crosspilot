@@ -73,9 +73,9 @@ type RunnerConfig struct {
 
 // Deps 是 SSE 处理器装配依赖。
 type Deps struct {
-	Journal  JournalStore
+	Journal   JournalStore
 	Submitter RunSubmitter
-	Logger   *slog.Logger
+	Logger    *slog.Logger
 
 	// Clock 用于「先落库再推送」的超时控制；为 nil 时使用 time.Now。
 	Clock func() time.Time
@@ -105,9 +105,9 @@ func Routes(deps Deps) http.Handler {
 // 响应：200 + 事件数组（含 final 状态）；500 仅在 journal 损坏或 submitter 崩溃时返回。
 //
 // 业务流程：
-//   1. 解析请求体拿到 run_id（生成或复用）
-//   2. 调用 Submitter.Submit
-//   3. 把 []Event 复制给客户端
+//  1. 解析请求体拿到 run_id（生成或复用）
+//  2. 调用 Submitter.Submit
+//  3. 把 []Event 复制给客户端
 //
 // 重连路径在 streamHandler，不在 submitHandler。
 func submitHandler(deps Deps) http.HandlerFunc {

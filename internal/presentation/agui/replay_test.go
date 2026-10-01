@@ -22,12 +22,12 @@ func TestParseCursor_Valid(t *testing.T) {
 
 func TestParseCursor_Errors(t *testing.T) {
 	cases := []string{
-		"",                    // 空
-		"run-1",               // 缺 seq
-		"run-1:",              // 空 seq
-		"run-1:abc",           // 非数字 seq
-		":5",                  // 空 run_id
-		"run-1:-3",            // 负 seq
+		"",          // 空
+		"run-1",     // 缺 seq
+		"run-1:",    // 空 seq
+		"run-1:abc", // 非数字 seq
+		":5",        // 空 run_id
+		"run-1:-3",  // 负 seq
 	}
 	for _, raw := range cases {
 		_, err := agui.ParseCursor(raw)

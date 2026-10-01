@@ -9,30 +9,30 @@ import (
 // 领域层的读模型：检索与展示都从它出发，它不关心自己来自关系库还是向量库。
 // 包含商品卡展示所需的全部字段（对比 P0 骨架版扩展了展示相关字段）。
 type Product struct {
-	ID          string
-	Title       string
-	Description string
-	Category    string // 品类，如"旅行装备"、"数码配件"
-	Brand       string
+	ID            string
+	Title         string
+	Description   string
+	Category      string // 品类，如"旅行装备"、"数码配件"
+	Brand         string
 	OriginCountry string
-	InStock     bool
-	ImageURL    string
-	ImageKind   string // "placeholder" | "product" | ...
-	ImageAlt    string
-	WeightKg    float64
-	DimensionsCm map[string]float64 // length/width/height
+	InStock       bool
+	ImageURL      string
+	ImageKind     string // "placeholder" | "product" | ...
+	ImageAlt      string
+	WeightKg      float64
+	DimensionsCm  map[string]float64 // length/width/height
 
 	// 价格与规格
-	PrimaryPrice Money       // 主规格的参考价（用于无 SPEC 查询时的展示）
-	SKUs         []SKU       // 全部规格
-	DefaultSKUID string      // 默认选中的规格 ID
+	PrimaryPrice Money  // 主规格的参考价（用于无 SPEC 查询时的展示）
+	SKUs         []SKU  // 全部规格
+	DefaultSKUID string // 默认选中的规格 ID
 
 	// 跨境属性
-	ShipsTo      []string    // 可送达国家列表，如 ["CN", "US", "EU"]
-	MaterialTags []string    // 材质标签，用于过滤
+	ShipsTo      []string // 可送达国家列表，如 ["CN", "US", "EU"]
+	MaterialTags []string // 材质标签，用于过滤
 
 	// 元数据
-	Highlights     []string           // 核心卖点，如 [{"label":"材质","detail":"帆布+再生尼龙"}]
+	Highlights     []string // 核心卖点，如 [{"label":"材质","detail":"帆布+再生尼龙"}]
 	Tags           []string
 	CanonicalID    string             // 同款合并ID
 	SourcePlatform string             // 来源平台
@@ -42,7 +42,7 @@ type Product struct {
 	SourceLanguage string
 	SourceLocale   string
 	DataProvenance string
-	Attributes     map[string]string  // 其他属性键值对
+	Attributes     map[string]string // 其他属性键值对
 }
 
 // Validate 报告商品是否满足领域约束。
@@ -141,10 +141,10 @@ func joinNonEmpty(parts []string, sep string) string {
 
 // SKU 是商品的一个规格变体。
 type SKU struct {
-	ID     string // 如 "P1001-S1"
-	Spec   string // 如 "军绿色" / "20寸"
-	Price  Money  // 规格价格（平台原币种）
-	Stock  int    // 库存数量
+	ID    string // 如 "P1001-S1"
+	Spec  string // 如 "军绿色" / "20寸"
+	Price Money  // 规格价格（平台原币种）
+	Stock int    // 库存数量
 }
 
 // ToSKUInfo 转换为 SKUInfo 供展示层使用。

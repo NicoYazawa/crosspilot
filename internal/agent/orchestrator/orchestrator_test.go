@@ -13,7 +13,7 @@ import (
 
 // TestD1_EndToEnd_PlaceOrder 验收 D1：
 //
-// 	「找一款防水登山包并下单」一轮意图完整跑通并落库。
+//	「找一款防水登山包并下单」一轮意图完整跑通并落库。
 //
 // 落库的真实载体是 create_order_tool 的 handler：测试里用 sync.Map 计数
 // 实际落入的订单数据；handler 既执行账本记录（fake）又返回 confirm JSON。
@@ -63,16 +63,16 @@ func TestD1_EndToEnd_PlaceOrder(t *testing.T) {
 		}
 		// 落库：返回 confirmation_required=true，附 confirmation 单据
 		confirmation := map[string]any{
-			"confirmation_id":      "conf-001",
-			"operation_id":         "op-001",
-			"buyer_id":             req.BuyerID,
-			"session_id":           "session-d1",
-			"status":               "pending",
-			"expires_at":           "2026-09-30T12:10:00Z",
-			"items":                req.Items,
-			"subtotal_minor":       29900,
-			"currency":             "CNY",
-			"snapshot_hash":        "abc123",
+			"confirmation_id": "conf-001",
+			"operation_id":    "op-001",
+			"buyer_id":        req.BuyerID,
+			"session_id":      "session-d1",
+			"status":          "pending",
+			"expires_at":      "2026-09-30T12:10:00Z",
+			"items":           req.Items,
+			"subtotal_minor":  29900,
+			"currency":        "CNY",
+			"snapshot_hash":   "abc123",
 		}
 		body := map[string]any{
 			"confirmation_required": true,
@@ -131,9 +131,9 @@ func TestD1_EndToEnd_PlaceOrder(t *testing.T) {
 
 	var events []orchestrator.Event
 	res, err := o.Run(context.Background(), orchestrator.Config{
-		SessionID:    "session-d1",
-		Query:        "找一款防水登山包并下单",
-		Agent:        "main",
+		SessionID:     "session-d1",
+		Query:         "找一款防水登山包并下单",
+		Agent:         "main",
 		MaxIterations: 8,
 		OnEvent: func(ev orchestrator.Event) {
 			events = append(events, ev)

@@ -84,8 +84,8 @@ type Result struct {
 
 // Turn is one round: model decision + tool calls + tool results.
 type Turn struct {
-	Content    string
-	ToolCalls  []tools.CallRequest
+	Content     string
+	ToolCalls   []tools.CallRequest
 	ToolResults []tools.ToolResult
 }
 

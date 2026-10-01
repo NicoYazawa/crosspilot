@@ -91,11 +91,16 @@ func TestBreaker_HalfOpenTransientReopens(t *testing.T) {
 func TestBreaker_MixedErrorsOnlyCountsTransient(t *testing.T) {
 	b := New(3, 100*time.Millisecond, IsClosedError)
 
-	b.Allow(); b.Record(ErrTransient)
-	b.Allow(); b.Record(errors.New("业务错误 A"))
-	b.Allow(); b.Record(ErrTransient)
-	b.Allow(); b.Record(errors.New("业务错误 B"))
-	b.Allow(); b.Record(ErrTransient) // 累计 3 次瞬时错误
+	b.Allow()
+	b.Record(ErrTransient)
+	b.Allow()
+	b.Record(errors.New("业务错误 A"))
+	b.Allow()
+	b.Record(ErrTransient)
+	b.Allow()
+	b.Record(errors.New("业务错误 B"))
+	b.Allow()
+	b.Record(ErrTransient) // 累计 3 次瞬时错误
 
 	if b.State() != StateOpen {
 		t.Fatalf("3 次瞬时错误应熔断，业务错误未计入，state=%d", b.State())
@@ -105,8 +110,10 @@ func TestBreaker_MixedErrorsOnlyCountsTransient(t *testing.T) {
 // Timeout 接口应被识别为瞬时。
 func TestBreaker_TimeoutErrorIsTransient(t *testing.T) {
 	b := New(2, 100*time.Millisecond, IsClosedError)
-	b.Allow(); b.Record(errTimeout("连接超时"))
-	b.Allow(); b.Record(errTimeout("再次超时"))
+	b.Allow()
+	b.Record(errTimeout("连接超时"))
+	b.Allow()
+	b.Record(errTimeout("再次超时"))
 	if b.State() != StateOpen {
 		t.Fatalf("timeout 错误应计为瞬时，state=%d", b.State())
 	}

@@ -6,16 +6,16 @@ import (
 
 // ProductSearchSpec describes the parameters for a product search.
 type ProductSearchSpec struct {
-	NormalizedQuery       string
-	Category              string
-	ShipTo                string
-	TopK                  int
-	PriceMaxMajor         *float64
-	TargetCurrency        Currency
-	ExcludedMaterialTags  []string
-	RequiredMaterialTags  []string
-	ProductID             string
-	SkuID                 string
+	NormalizedQuery      string
+	Category             string
+	ShipTo               string
+	TopK                 int
+	PriceMaxMajor        *float64
+	TargetCurrency       Currency
+	ExcludedMaterialTags []string
+	RequiredMaterialTags []string
+	ProductID            string
+	SkuID                string
 }
 
 // Validate checks that the spec has valid parameters.

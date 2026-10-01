@@ -16,23 +16,23 @@ type ToolDef struct {
 
 // ToolParameters is a JSON Schema object for tool parameters.
 type ToolParameters struct {
-	Type       string                 `json:"type"`
+	Type       string                  `json:"type"`
 	Properties map[string]ParameterDef `json:"properties"`
-	Required   []string               `json:"required"`
+	Required   []string                `json:"required"`
 }
 
 // ParameterDef is a single parameter schema.
 // For object types, Properties and Required are used instead of Type/Enum/Items.
 type ParameterDef struct {
-	Type        string          `json:"type"`
-	Description string          `json:"description"`
-	Enum        []string        `json:"enum,omitempty"`
-	Default     any             `json:"default,omitempty"`
-	MinItems    *int            `json:"minItems,omitempty"`
-	MaxItems    *int            `json:"maxItems,omitempty"`
-	Items       *ParameterDef   `json:"items,omitempty"`
+	Type        string                  `json:"type"`
+	Description string                  `json:"description"`
+	Enum        []string                `json:"enum,omitempty"`
+	Default     any                     `json:"default,omitempty"`
+	MinItems    *int                    `json:"minItems,omitempty"`
+	MaxItems    *int                    `json:"maxItems,omitempty"`
+	Items       *ParameterDef           `json:"items,omitempty"`
 	Properties  map[string]ParameterDef `json:"properties,omitempty"`
-	Required    []string        `json:"required,omitempty"`
+	Required    []string                `json:"required,omitempty"`
 }
 
 // ToolResult is what a tool returns to the agent.
@@ -92,14 +92,14 @@ func AllToolDefs() []ToolDef {
 
 // ToolRequiredFields maps tool name → required result fields.
 var ToolRequiredFields = map[string][]string{
-	"product_search_tool":        {"hits", "recall_strategy"},
-	"category_insight_tool":      {"insights"},
-	"create_order_tool":          {"confirmation_required", "confirmation"},
-	"query_order_tool":           {"order_id", "status"},
-	"cancel_order_tool":          {"confirmation_required", "confirmation"},
-	"task_dispatch_tool":         {"agent", "status"},
-	"shopping_form_tool":         {"form_id", "status"},
-	"load_agent_skill_tool":      {"content_hash"},
+	"product_search_tool":         {"hits", "recall_strategy"},
+	"category_insight_tool":       {"insights"},
+	"create_order_tool":           {"confirmation_required", "confirmation"},
+	"query_order_tool":            {"order_id", "status"},
+	"cancel_order_tool":           {"confirmation_required", "confirmation"},
+	"task_dispatch_tool":          {"agent", "status"},
+	"shopping_form_tool":          {"form_id", "status"},
+	"load_agent_skill_tool":       {"content_hash"},
 	"lookup_strategy_memory_tool": {"strategies"},
-	"web_search_tool":            {"results"},
+	"web_search_tool":             {"results"},
 }

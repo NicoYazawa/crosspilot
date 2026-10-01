@@ -113,7 +113,7 @@ func (uc *CatalogSearchUseCase) executeSearch(ctx context.Context, spec catalog.
 		TotalCandidates: len(filtered),
 		RecallStrategy:  recallStrategy,
 		RerankApplied:   recallStrategy == "embedding_rerank",
-		FilteredOut:    filteredOut,
+		FilteredOut:     filteredOut,
 	}, nil
 }
 
@@ -167,7 +167,7 @@ func (uc *CatalogSearchUseCase) executeExactIDs(ctx context.Context, spec catalo
 		RecallStrategy:     "exact_id_lookup",
 		RerankApplied:      false,
 		FilteredOut:        rejected,
-		MissingIdentifiers:  missing,
+		MissingIdentifiers: missing,
 		ExistenceChecked:   true,
 	}
 
@@ -316,11 +316,11 @@ func (uc *CatalogSearchUseCase) toFilteredOut(product catalog.Product, spec cata
 	}
 	return FilteredOut{
 		ProductID:  product.ID,
-		Title:     product.Title,
-		Category:  product.Category,
+		Title:      product.Title,
+		Category:   product.Category,
 		PriceMajor: price.ToMajorUnitsFloat(),
-		Currency:  catalog.Currency(spec.TargetCurrency),
-		Reason:    reason,
+		Currency:   catalog.Currency(spec.TargetCurrency),
+		Reason:     reason,
 	}
 }
 
@@ -481,14 +481,14 @@ type ScoredProduct struct {
 }
 
 type SearchResult struct {
-	Hits               []ProductCard
-	TotalCandidates    int
-	RecallStrategy     string
-	RerankApplied     bool
-	FilteredOut       []FilteredOut
-	MissingIdentifiers []string
+	Hits                 []ProductCard
+	TotalCandidates      int
+	RecallStrategy       string
+	RerankApplied        bool
+	FilteredOut          []FilteredOut
+	MissingIdentifiers   []string
 	RequestedIdentifiers []string
-	ExistenceChecked   bool
+	ExistenceChecked     bool
 }
 
 type FilteredOut struct {

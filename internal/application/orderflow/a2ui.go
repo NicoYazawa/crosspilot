@@ -35,10 +35,10 @@ type ConfirmationLike struct {
 }
 
 type ConfirmationItem struct {
-	ProductID string
-	SKUID    string
-	Title    string
-	Spec     string
+	ProductID  string
+	SKUID      string
+	Title      string
+	Spec       string
 	PriceMajor float64
 }
 
@@ -63,7 +63,7 @@ func (e *A2UIEmitter) Emit(c ConfirmationLike) ([]map[string]any, error) {
 				"type": "Column",
 				"path": runevent.ShoppingRequirementsPath,
 				"props": map[string]any{
-					"title":     "购物清单",
+					"title":           "购物清单",
 					"confirmation_id": c.ConfirmationID,
 					"expires_at":      c.ExpiresAt,
 				},
@@ -89,8 +89,8 @@ func (e *A2UIEmitter) Emit(c ConfirmationLike) ([]map[string]any, error) {
 	}
 
 	updateComp := map[string]any{
-		"action":    runevent.A2UIActionUpdateComponents,
-		"catalogId": runevent.A2UICatalogID,
+		"action":     runevent.A2UIActionUpdateComponents,
+		"catalogId":  runevent.A2UICatalogID,
 		"components": buildItemComponents(c.Items),
 	}
 	if len(c.Items) > 0 {
@@ -115,14 +115,14 @@ func (e *A2UIEmitter) Emit(c ConfirmationLike) ([]map[string]any, error) {
 						"status":     c.Status,
 						"expires_at": c.ExpiresAt,
 						"subtotal": map[string]any{
-							"minor":  c.SubtotalMinor,
+							"minor":    c.SubtotalMinor,
 							"currency": c.Currency,
 						},
 						"snapshot_hash": c.SnapshotHash,
 					},
 				},
 				map[string]any{
-					"key": "items",
+					"key":   "items",
 					"value": buildItemData(c.Items),
 				},
 			},
@@ -147,10 +147,10 @@ func buildItemComponents(items []ConfirmationItem) []any {
 			"type":    "ProductCard",
 			"surface": "dynamic",
 			"props": map[string]any{
-				"product_id": item.ProductID,
-				"sku_id":     item.SKUID,
-				"title":      item.Title,
-				"spec":       item.Spec,
+				"product_id":  item.ProductID,
+				"sku_id":      item.SKUID,
+				"title":       item.Title,
+				"spec":        item.Spec,
 				"price_major": item.PriceMajor,
 			},
 		})
@@ -163,9 +163,9 @@ func buildItemData(items []ConfirmationItem) []map[string]any {
 	out := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		out = append(out, map[string]any{
-			"product_id": item.ProductID,
-			"sku_id":     item.SKUID,
-			"title":      item.Title,
+			"product_id":  item.ProductID,
+			"sku_id":      item.SKUID,
+			"title":       item.Title,
 			"price_major": item.PriceMajor,
 		})
 	}

@@ -38,9 +38,9 @@ func (c *QdrantClient) Search(ctx context.Context, embedding []float32, topN int
 	}
 
 	reqBody := map[string]any{
-		"vector":         embedding,
-		"limit":          topN,
-		"with_payload":   false,
+		"vector":       embedding,
+		"limit":        topN,
+		"with_payload": false,
 	}
 	reqJSON, _ := json.Marshal(reqBody)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,

@@ -76,9 +76,9 @@ type Breaker struct {
 	classify       Classifier
 
 	// Hooks for tests
-	OnOpen    func()
+	OnOpen     func()
 	OnHalfOpen func()
-	OnClose   func()
+	OnClose    func()
 }
 
 // New constructs a Breaker.
