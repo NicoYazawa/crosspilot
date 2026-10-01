@@ -108,7 +108,8 @@ export class RecoveringSseClient {
     if (!state) return;
 
     const path = `/agui/runs/${encodeURIComponent(this.opts.runId)}/events`;
-    const url = new URL(path, this.opts.baseUrl);
+    const base = this.opts.baseUrl || window.location.href;
+    const url = new URL(path, base);
     if (since > 0) {
       url.searchParams.set('cursor', `${this.opts.runId}:${since - 1}`);
     }
@@ -252,7 +253,7 @@ export class RecoveringSseClient {
     const tick = async (): Promise<void> => {
       if (state.closed) return;
       try {
-        const metaUrl = new URL(`/agui/runs/${encodeURIComponent(this.opts.runId)}`, this.opts.baseUrl);
+        const metaUrl = new URL(`/agui/runs/${encodeURIComponent(this.opts.runId)}`, this.opts.baseUrl || window.location.href);
         const headers: Record<string, string> = { Accept: 'application/json' };
         if (this.opts.hmacSecret) {
           const hmacHeaders = await buildHmacHeaders({

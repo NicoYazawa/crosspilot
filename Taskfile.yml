@@ -92,13 +92,14 @@ tasks:
   # ---------------------------------------------------------------------------
 
   check:
-    desc: 本地完整校验（格式 + 静态检查 + 架构 + 测试 + 覆盖率闸门）
+    desc: 仓库整体校验（Go + 前端）
     cmds:
       - task: fmt:check
       - task: lint
       - task: arch
       - task: test
       - task: cover:gate
+      - task: frontend:check
 
   # ---------------------------------------------------------------------------
   # 构建与运行
@@ -157,3 +158,51 @@ tasks:
     desc: 跟踪本地依赖日志
     cmds:
       - docker compose logs -f
+
+  # ---------------------------------------------------------------------------
+  # 前端（Vite + React + Playwright）
+  # ---------------------------------------------------------------------------
+
+  frontend:install:
+    desc: 安装前端依赖
+    dir: frontend
+    cmds:
+      - npm install --legacy-peer-deps
+
+  frontend:dev:
+    desc: 启动前端 dev server（端口 5173）
+    dir: frontend
+    cmds:
+      - npm run dev
+
+  frontend:build:
+    desc: 构建前端产物
+    dir: frontend
+    cmds:
+      - npm run build
+
+  frontend:lint:
+    desc: 前端 ESLint
+    dir: frontend
+    cmds:
+      - npm run lint
+
+  frontend:test:
+    desc: 前端单元测试（vitest）
+    dir: frontend
+    cmds:
+      - npm run test
+
+  frontend:e2e:
+    desc: 前端 Playwright E2E（含 install + test）
+    dir: frontend
+    cmds:
+      - npm run e2e:install
+      - npm run e2e
+
+  frontend:check:
+    desc: 前端完整校验（lint + test + build）
+    cmds:
+      - task: frontend:lint
+      - task: frontend:test
+      - task: frontend:build

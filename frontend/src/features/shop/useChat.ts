@@ -26,6 +26,7 @@ export interface UseChatOptions {
 
 export interface UseChatResult {
   messages: ChatMessage[];
+  a2uiMessages: unknown[];
   isPending: boolean;
   error: string | null;
   send: (text: string) => Promise<void>;
@@ -47,6 +48,7 @@ const LATENCY_METRIC = 'crosspilot.optimistic.add_latency_ms';
 
 export function useChat(opts: UseChatOptions): UseChatResult {
   const [committed, setCommitted] = useState<ChatMessage[]>([]);
+  const [a2uiMessages, setA2uiMessages] = useState<unknown[]>([]);
   const [optimistic, addOptimistic] = useOptimistic<ChatMessage[], ChatMessage>(
     committed,
     (curr, next) => [...curr, next],
@@ -64,7 +66,9 @@ export function useChat(opts: UseChatOptions): UseChatResult {
       }
     }
     if (ev.kind === 'a2ui') {
-      // A2UI 渲染由 Renderer 子组件处理；这里只记录一条简略文本
+      // 同时记录给 Renderer（原始 payload）
+      setA2uiMessages((prev) => [...prev, ev.payload]);
+      // 并在对话流里留一条文本摘要
       const payload = (ev.payload ?? {}) as { action?: string };
       setCommitted((prev) => [...prev, {
         id: ev.event_id,
@@ -76,6 +80,7 @@ export function useChat(opts: UseChatOptions): UseChatResult {
   }, []);
 
   const onError = useCallback((err: SseError): void => {
+    window.console.error('[sse error]', err);
     setError(`${err.kind}${err.kind === 'gap' ? ` expected=${err.expected} actual=${err.actual}` : ''}`);
   }, []);
 
@@ -145,6 +150,7 @@ export function useChat(opts: UseChatOptions): UseChatResult {
 
   return {
     messages: optimistic,
+    a2uiMessages,
     isPending,
     error,
     send,

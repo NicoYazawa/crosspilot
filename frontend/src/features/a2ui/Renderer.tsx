@@ -11,7 +11,7 @@
 //   createSurface → updateComponents → updateDataModel（三者顺序可错开但 update
 //   必须在 create 之后；updateDataModel 之前 createSurface 必须成功）
 
-import { useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { A2UIRenderError, validateMessage } from './schema';
 import { renderComponent } from './registry';
 import type { ValidatedA2UIMessage, ValidatedComponent } from './schema';
@@ -137,7 +137,7 @@ function renderTree(
         if (typeof cid !== 'string') continue;
         const child = components.get(cid);
         if (!child) continue;
-        childNodes.push(renderTree(child, components, dataModel));
+        childNodes.push(<React.Fragment key={cid}>{renderTree(child, components, dataModel)}</React.Fragment>);
       }
     }
     return renderComponent(component.type, component.id, enrichedProps, childNodes);

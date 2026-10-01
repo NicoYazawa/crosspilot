@@ -84,3 +84,46 @@ jobs:
 
       - name: 构建产物
         run: task build
+
+  # 前端（lint + unit + e2e）。
+  # 与 Go 门禁并列；前端代码独立栈（Node 24 + Playwright Chromium）。
+  frontend:
+    name: 前端校验（lint + unit + e2e）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 安装依赖
+        working-directory: frontend
+        run: npm ci --legacy-peer-deps
+
+      - name: ESLint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: 单元测试（vitest）
+        working-directory: frontend
+        run: npm run test
+
+      - name: 构建产物
+        working-directory: frontend
+        run: npm run build
+
+      - name: 安装 Playwright 浏览器
+        working-directory: frontend
+        run: npm run e2e:install
+
+      - name: E2E（Playwright）
+        working-directory: frontend
+        run: npm run e2e

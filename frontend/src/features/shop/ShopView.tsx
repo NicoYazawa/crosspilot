@@ -13,8 +13,7 @@ import { A2UIRenderer } from '@/features/a2ui/Renderer';
 
 export function ShopView() {
   const [query, setQuery] = useState('');
-  const [a2uiMessages] = useState<unknown[]>([]);
-  const { messages, isPending, error, send, stop } = useChat({
+  const { messages, a2uiMessages, isPending, error, send, stop } = useChat({
     baseUrl: '',
     onMetric: (name, value) => {
       window.console.debug(`[metric] ${name}=${value.toFixed(2)}ms`);
@@ -24,8 +23,7 @@ export function ShopView() {
   const onSubmit = (e: FormEvent<HTMLFormElement>): void => {
     e.preventDefault();
     if (query.trim() === '') return;
-    void send(query.trim());
-    setQuery('');
+    void send(query.trim()).then(() => setQuery(''));
   };
 
   return (
