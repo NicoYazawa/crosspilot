@@ -22,7 +22,7 @@ var ErrJudgeNotImplemented = errors.New("observability: judge 模型尚未接入
 // 字段命名遵循「给 judge 看的内容是已脱敏的」原则——Judge 输入与 Emitter
 // 写入的 SinkRecord 共享脱敏器，避免泄漏 PII 到 judge 供应商。
 type JudgeRequest struct {
-	RunID      string
+	RunID       string
 	BaselineSeq int64
 	AgainstSeq  int64
 	// 两侧事件 payload（已脱敏）；由 caller 传入

@@ -20,9 +20,9 @@ import (
 type DiffKind string
 
 const (
-	DiffAdded    DiffKind = "added"     // 仅在 against 出现
-	DiffRemoved  DiffKind = "removed"   // 仅在 baseline 出现
-	DiffChanged  DiffKind = "changed"   // 两边都有，但 payload 不同
+	DiffAdded   DiffKind = "added"   // 仅在 against 出现
+	DiffRemoved DiffKind = "removed" // 仅在 baseline 出现
+	DiffChanged DiffKind = "changed" // 两边都有，但 payload 不同
 )
 
 // DiffItem 是一条差异记录。

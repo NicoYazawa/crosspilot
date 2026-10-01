@@ -63,11 +63,11 @@ func TestMetrics_RecordsEmitAndDropped(t *testing.T) {
 func TestMetrics_NilSafe(t *testing.T) {
 	t.Parallel()
 	var m *Metrics
-	m.AddEmit(1)        // 不应 panic
-	m.AddDropped(1)     // 不应 panic
-	m.AddEmitErrors(1)  // 不应 panic
+	m.AddEmit(1)         // 不应 panic
+	m.AddDropped(1)      // 不应 panic
+	m.AddEmitErrors(1)   // 不应 panic
 	m.AddRedactErrors(1) // 不应 panic
-	m.SetQueueDepth(5)  // 不应 panic
+	m.SetQueueDepth(5)   // 不应 panic
 	snap := m.Snapshot()
 	if snap != (MetricsSnapshot{}) {
 		t.Errorf("nil Metrics.Snapshot 应返回零值")

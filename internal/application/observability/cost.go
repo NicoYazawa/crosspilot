@@ -12,15 +12,15 @@ import "context"
 // 注：P6 起所有 JSON 字段统一 snake_case（与 replayResponse / MetricsSnapshot 对齐）。
 // Go 字段名保持不变以保护 Go 调用方语义；JSON tag 是给前端的契约。
 type CostSummary struct {
-	RunID          string             `json:"run_id"`
-	TotalCostMinor int64              `json:"total_cost_minor"` // 总成本（已定价部分，按主币种累加）
-	Currency       string             `json:"currency"`         // 主币种（取首条 CostEvent 的币种）
-	UnpricedCount  int64              `json:"unpriced_count"`   // 未命中价格表的调用次数（F4 闸门）
-	TotalCalls     int64              `json:"total_calls"`      // 总调用次数
-	TokensIn       int64              `json:"tokens_in"`
-	TokensOut      int64              `json:"tokens_out"`
-	TokensCached   int64              `json:"tokens_cached"`
-	TokensReason   int64              `json:"tokens_reasoning"`
+	RunID          string              `json:"run_id"`
+	TotalCostMinor int64               `json:"total_cost_minor"` // 总成本（已定价部分，按主币种累加）
+	Currency       string              `json:"currency"`         // 主币种（取首条 CostEvent 的币种）
+	UnpricedCount  int64               `json:"unpriced_count"`   // 未命中价格表的调用次数（F4 闸门）
+	TotalCalls     int64               `json:"total_calls"`      // 总调用次数
+	TokensIn       int64               `json:"tokens_in"`
+	TokensOut      int64               `json:"tokens_out"`
+	TokensCached   int64               `json:"tokens_cached"`
+	TokensReason   int64               `json:"tokens_reasoning"`
 	ByProvider     []ProviderBreakdown `json:"by_provider"` // 按 provider 拆开
 }
 

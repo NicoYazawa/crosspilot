@@ -21,10 +21,10 @@ import (
 // Emitter 持有一个；多个 Emitter 实例时各自一份（按 sink 分桶）。
 // 调用方通过 Snapshot() 读快照，不会阻塞 Emitter 自身。
 type Metrics struct {
-	QueueDepth   *expvar.Int // 当前 channel 队列长度
-	DroppedTotal *expvar.Int // 累计 dropped 事件数（任意 reason）
-	EmitTotal    *expvar.Int // 累计 Emit 调用次数（含成功 + dropped）
-	EmitErrors   *expvar.Int // 累计 sink 写入错误次数
+	QueueDepth   *expvar.Int  // 当前 channel 队列长度
+	DroppedTotal *expvar.Int  // 累计 dropped 事件数（任意 reason）
+	EmitTotal    *expvar.Int  // 累计 Emit 调用次数（含成功 + dropped）
+	EmitErrors   *expvar.Int  // 累计 sink 写入错误次数
 	redactErrors atomic.Int64 // 累计脱敏失败次数（内部用，不暴露 expvar）
 }
 

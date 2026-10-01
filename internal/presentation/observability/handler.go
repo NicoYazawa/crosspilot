@@ -80,10 +80,10 @@ func (h *Handler) metrics(w http.ResponseWriter, _ *http.Request) {
 // ---- replay ----
 
 type replayResponse struct {
-	RunID    string              `json:"run_id"`
-	Events   []runevent.Event    `json:"events"`
-	TotalSeq int64               `json:"total_seq"`
-	HasMore  bool                `json:"has_more"`
+	RunID    string           `json:"run_id"`
+	Events   []runevent.Event `json:"events"`
+	TotalSeq int64            `json:"total_seq"`
+	HasMore  bool             `json:"has_more"`
 }
 
 func (h *Handler) replayEvents(w http.ResponseWriter, r *http.Request) {

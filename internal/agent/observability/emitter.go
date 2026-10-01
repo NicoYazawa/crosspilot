@@ -98,10 +98,10 @@ type EmitterConfig struct {
 // 脱敏在 Emit 同步阶段完成——这是 F7「写路径脱敏」的物理保证：原始 payload
 // 不会进入 SinkRecord，永远只塞脱敏后的 JSON。
 type Emitter struct {
-	cfg      EmitterConfig
-	queue    chan SinkRecord
-	sink     Sink
-	stopped  atomic.Bool
+	cfg     EmitterConfig
+	queue   chan SinkRecord
+	sink    Sink
+	stopped atomic.Bool
 
 	wg     sync.WaitGroup
 	closed chan struct{}
