@@ -53,7 +53,7 @@ describe('A2UI v0.9 — G4 XSS 验收', () => {
           {
             id: 'card',
             type: 'ProductCard',
-            props: { title: '登山包', subtitle: '防水', price_minor: 39900, currency: 'CNY' },
+            props: { title: '登山包', brand: 'Roamix', price_major: 299, currency: 'CNY' },
           },
         ],
       },
@@ -61,7 +61,60 @@ describe('A2UI v0.9 — G4 XSS 验收', () => {
     renderMessages(msgs);
     const html = container.innerHTML;
     expect(html).toContain('登山包');
-    expect(html).toContain('39900');
+    expect(html).toContain('299');
+  });
+
+  // 这条钉的是「后端发的 props 前端认识」——两侧各自的用例都用自己的键名，
+  // 边界上错了谁都不会红。props 逐字取自 internal/application/orderflow 的
+  // buildHitComponents / buildItemComponents 输出。
+  it('后端 emitter 实际发出的 props → 卡片渲染出价格与商品标识', () => {
+    const msgs = [
+      {
+        action: 'createSurface',
+        catalogId: A2UI_CATALOG_ID,
+        version: A2UI_VERSION,
+        components: [
+          {
+            id: 'root',
+            type: 'Column',
+            path: SHOPPING_REQUIREMENTS_PATH,
+            // children 是组件 id 列表——Renderer 只对 type=Column 的节点
+            // 下降，少了它页面只有一个「(空 Column)」。
+            props: { title: '搜索结果', children: ['hit-0'] },
+          },
+        ],
+      },
+      {
+        action: 'updateComponents',
+        catalogId: A2UI_CATALOG_ID,
+        components: [
+          {
+            id: 'hit-0',
+            type: 'ProductCard',
+            surface: 'dynamic',
+            props: {
+              product_id: 'P1003',
+              sku_id: 'P1003-S1',
+              title: 'Roamix 防水登山包 30L',
+              brand: '',
+              category: '户外装备',
+              price_major: 299,
+              currency: 'CNY',
+              image_url: '',
+            },
+          },
+        ],
+      },
+    ];
+    renderMessages(msgs);
+    const html = container.innerHTML;
+    expect(html).toContain('Roamix 防水登山包 30L');
+    // 价格必须出现：读错键名（如 price_minor）时这里不会红，但用户看不到价格。
+    expect(html).toContain('299');
+    expect(html).toContain('CNY');
+    expect(html).toContain('户外装备');
+    expect(html).toContain('data-product-id="P1003"');
+    expect(html).toContain('data-sku-id="P1003-S1"');
   });
 
   it('XSS 注入：<script>alert(1)</script> → DOM 文本含字面量、<script> 元素数不增加', () => {

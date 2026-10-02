@@ -1,11 +1,11 @@
-// 极简 fetch 客户端（HMAC 头按需注入）。
+// 极简 fetch 客户端（鉴权头按需注入）。
 //
 // 设计要点：
 //   - 不引第三方 axios/ky：后端契约稳定、4 条路由足够，写死 fetch 就够。
-//   - hmacSecret 为空时跳过签名（dev demo / 单机部署）。
+//   - authToken 为空时不注入 Authorization（未启用鉴权的部署）。
 //   - 错误统一抛 ApiError，UI 用 try/catch 渲染灰卡。
 
-import { buildHmacHeaders } from '../sse/hmac';
+import { buildAuthHeaders } from '../auth';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -20,16 +20,19 @@ export class ApiError extends Error {
 
 export interface ApiClientOptions {
   baseUrl: string;
-  hmacSecret?: string;
+  authToken?: string;
+  sessionId?: string;
 }
 
 export class ApiClient {
   private readonly baseUrl: string;
-  private readonly hmacSecret: string;
+  private readonly authToken: string;
+  private readonly sessionId: string;
 
   constructor(opts: ApiClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, '');
-    this.hmacSecret = opts.hmacSecret ?? '';
+    this.authToken = opts.authToken ?? '';
+    this.sessionId = opts.sessionId ?? '';
   }
 
   async get<T>(path: string, query?: Record<string, string | number | undefined>): Promise<T> {
@@ -58,14 +61,7 @@ export class ApiClient {
       Accept: 'application/json',
     };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
-    if (this.hmacSecret) {
-      const hmac = await buildHmacHeaders({
-        method,
-        path: url.pathname,
-        secret: this.hmacSecret,
-      });
-      Object.assign(headers, hmac);
-    }
+    Object.assign(headers, buildAuthHeaders(this.authToken, this.sessionId));
     const init: RequestInit = { method, headers };
     if (body !== undefined) init.body = JSON.stringify(body);
     const res = await fetch(url.toString(), init);

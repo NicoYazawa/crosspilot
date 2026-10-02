@@ -1,13 +1,14 @@
 // A2UI v0.9 字面量常量与组件类型。
-// 来源：内部 decision（P4 + P6）；catalogId = "globex.local/shopping-v2"
-//
-// 注：catalogId 是后端契约字面量（不能改），其值含源项目品牌词。
-// 此处仅做声明与导出；运行时通过反序列化 Base64 还原，避免字面量出现在源码中。
+// 来源：内部 decision（P4 + P6）；catalogId 见下。
 
-const _CATALOG_HOST_B64 = 'Z2xvYmV4'; // base64('globex')
-const _CATALOG_TAIL = 'LmxvY2FsL3Nob3BwaW5nLXYy'; // base64('.local/shopping-v2')
-// eslint-disable-next-line no-restricted-syntax -- 契约值 base64 还原
-export const A2UI_CATALOG_ID = atob(_CATALOG_HOST_B64) + atob(_CATALOG_TAIL) as 'globex.local/shopping-v2';
+// A2UI_CATALOG_ID 是 A2UI v0.9 的协议字面量，由开发计划附录 B#2 / E6 钉死，
+// 必须与后端 internal/agent/runevent/a2ui.go 的 A2UICatalogID 逐字符相同。
+//
+// 这里的品牌词是协议值，不是文档里的项目称呼——eslint 的 commit 禁词规则
+// 专为后者而设，故按精确值放行（见 eslint.config.js 的 :not 例外）。
+// 曾经用 Base64 藏起这个字面量来绕过规则，那是把一条好规则变成了不可搜索的
+// 常量：改协议值时没人能 grep 到它。
+export const A2UI_CATALOG_ID = 'globex.local/shopping-v2';
 export const A2UI_VERSION = '0.9' as const;
 export const SHOPPING_REQUIREMENTS_PATH = '/requirements' as const;
 

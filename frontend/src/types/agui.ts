@@ -32,10 +32,13 @@ export interface RunEvent {
   created_at: string;
 }
 
+// SubmitRequest 是 POST /commerce/ag-ui/run 的请求体。
+//
+// 没有 buyer_id / session_id：后端的对应字段标了 json:"-"，身份只从令牌
+// （Authorization: Bearer）与 X-Session-ID 解析。放在这里会让调用方以为
+// 客户端能指定身份——那正是被堵掉的越权路径。
 export interface SubmitRequest {
   run_id?: string;
-  buyer_id: string;
-  session_id: string;
   query: string;
   agent?: string;
 }

@@ -39,7 +39,11 @@ export default [
       'no-restricted-syntax': [
         'error',
         {
-          selector: "Literal[value=/globex/i]",
+          // 放行 A2UI 的协议字面量：catalogId 是开发计划钉死的线格式值
+          // （internal/agent/runevent/a2ui.go 的 A2UICatalogID），不是文档里
+          // 对源项目的称呼。用 Base64 把它藏起来只会让协议值不可搜索，
+          // 所以在这里按精确值开一个口子，其余出现仍然报错。
+          selector: "Literal[value=/globex/i]:not([value='globex.local/shopping-v2'])",
           message: 'commit 禁词：globex',
         },
         {

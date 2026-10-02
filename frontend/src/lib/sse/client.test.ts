@@ -3,7 +3,7 @@
 // 覆盖（G3 验收）：
 //   1. seq 缺口：mock fetch 400 + body 'seq_gap' → onError({ kind: 'gap' })
 //   2. 跨 run：cursor.runId !== runId → onError({ kind: 'cross-run' })
-//   3. 空 secret：fetch 调用未带 X-HMAC-* 头
+//   3. 空 token：fetch 调用未带 Authorization 头
 //   4. terminal kind：SSE 流以 run_finished 收尾 → polling 不启动
 //   5. tail fallback：SSE 流自然关闭 + meta 返回新 last_seq → onTerminal(meta)
 
@@ -32,7 +32,7 @@ function makeResponse(
   status: number,
   body: ReadableStream<Uint8Array> | null,
   contentType = 'text/event-stream',
-  _url = 'http://localhost/agui/runs/run-A/events',
+  _url = 'http://localhost/commerce/ag-ui/runs/run-A/events',
 ): Response {
   const headers = new Headers();
   headers.set('Content-Type', contentType);
@@ -119,7 +119,7 @@ describe('RecoveringSseClient — G3 验收', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('空 secret：fetch 调用未带 X-HMAC-* 头', async () => {
+  it('空 token：fetch 调用未带 Authorization 头', async () => {
     const seenHeaders: Headers[] = [];
     globalThis.fetch = vi.fn(async (_url, init) => {
       const h = new Headers(init?.headers);
@@ -130,7 +130,7 @@ describe('RecoveringSseClient — G3 验收', () => {
     const client = new RecoveringSseClient({
       baseUrl: 'http://x',
       runId: 'run-A',
-      hmacSecret: '',
+      authToken: '',
       onEvent: () => {},
       onError: () => {},
     });
@@ -138,9 +138,47 @@ describe('RecoveringSseClient — G3 验收', () => {
     const h = seenHeaders[0];
     expect(h).toBeDefined();
     if (h) {
-      expect(h.get('X-HMAC-Sign')).toBeNull();
-      expect(h.get('X-HMAC-Timestamp')).toBeNull();
+      expect(h.get('Authorization')).toBeNull();
+      expect(h.get('X-Session-ID')).toBeNull();
     }
+  });
+
+  it('带 token：fetch 调用注入 Authorization: Bearer', async () => {
+    const seenHeaders: Headers[] = [];
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      seenHeaders.push(new Headers(init?.headers));
+      return makeResponse(200, sseStream([]));
+    }) as unknown as typeof fetch;
+
+    const client = new RecoveringSseClient({
+      baseUrl: 'http://x',
+      runId: 'run-A',
+      authToken: 'jwt-abc',
+      sessionId: 'sess-1',
+      onEvent: () => {},
+      onError: () => {},
+    });
+    await client.start();
+    const h = seenHeaders[0];
+    expect(h?.get('Authorization')).toBe('Bearer jwt-abc');
+    expect(h?.get('X-Session-ID')).toBe('sess-1');
+  });
+
+  it('SSE 与 meta 请求都走 /commerce/ag-ui 前缀', async () => {
+    const seenUrls: string[] = [];
+    globalThis.fetch = vi.fn(async (url) => {
+      seenUrls.push(String(url));
+      return makeResponse(200, sseStream([]));
+    }) as unknown as typeof fetch;
+
+    const client = new RecoveringSseClient({
+      baseUrl: 'http://x',
+      runId: 'run-A',
+      onEvent: () => {},
+      onError: () => {},
+    });
+    await client.start();
+    expect(seenUrls[0]).toBe('http://x/commerce/ag-ui/runs/run-A/events');
   });
 
   it('terminal kind：SSE 以 run_finished 收尾 → polling 不启动', async () => {

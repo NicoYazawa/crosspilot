@@ -44,11 +44,11 @@ function sseFrame(event: string, data: unknown, id?: string): string {
   return lines.join('\n') + '\n\n';
 }
 
-// mock /agui/runs POST + /agui/runs/{id}/events SSE + /agui/runs/{id} meta + /agui/runs/{id}/confirm
+// mock /commerce/ag-ui/run POST + /commerce/ag-ui/runs/{id}/events SSE + /commerce/ag-ui/runs/{id} meta
 export async function mockAguiRuns(page: Page, script: AguiScript): Promise<void> {
   const runId = script.runId;
 
-  await page.route('**/agui/runs', async (route: Route) => {
+  await page.route('**/commerce/ag-ui/run', async (route: Route) => {
     const req = route.request();
     if (req.method() === 'POST') {
       await route.fulfill({
@@ -61,7 +61,7 @@ export async function mockAguiRuns(page: Page, script: AguiScript): Promise<void
     }
   });
 
-  await page.route(`**/agui/runs/${runId}/events`, async (route: Route) => {
+  await page.route(`**/commerce/ag-ui/runs/${runId}/events`, async (route: Route) => {
     const body = script.events.map((e) => sseFrame(e.kind, e.data, `e-${e.kind}`)).join('');
     await route.fulfill({
       status: 200,
@@ -74,19 +74,11 @@ export async function mockAguiRuns(page: Page, script: AguiScript): Promise<void
     });
   });
 
-  await page.route(`**/agui/runs/${runId}`, async (route: Route) => {
+  await page.route(`**/commerce/ag-ui/runs/${runId}`, async (route: Route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ run_id: runId, last_seq: 4 }),
-    });
-  });
-
-  await page.route(`**/agui/runs/${runId}/confirm`, async (route: Route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ run_id: runId, event: { event_id: `${runId}:5`, run_id: runId, seq: 5, kind: 'confirm_decided', agent: 'user', payload: {}, created_at: '2026-10-01T00:00:05Z' } }),
     });
   });
 }

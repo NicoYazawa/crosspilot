@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { ApiError, defaultApi } from '@/lib/api/client';
+import { formatCost } from './money';
 import type { CostSummary } from '@/types/api';
 
 export interface CostViewProps {
@@ -52,7 +53,11 @@ export function CostView({ runId }: CostViewProps) {
       <div className="cost-cards">
         <div className="cost-card">
           <h3>总成本</h3>
-          <p><strong>{data.total_cost_minor}</strong> {data.currency}</p>
+          {/* 换算成货币单位显示：后端给的是 1e-6 元为单位的整数，
+              裸打印会让人以为是元，差六个数量级。title 里保留原始值备查。 */}
+          <p title={`${data.total_cost_minor} 最小单位（1e-6 ${data.currency}）`}>
+            <strong>{formatCost(data.total_cost_minor, data.currency)}</strong>
+          </p>
         </div>
         <div className="cost-card">
           <h3>总调用数</h3>
@@ -99,7 +104,9 @@ export function CostView({ runId }: CostViewProps) {
               <td>{p.provider}</td>
               <td>{p.model}</td>
               <td>{p.calls}</td>
-              <td>{p.cost_minor} {p.currency}</td>
+              <td title={`${p.cost_minor} 最小单位（1e-6 ${p.currency}）`}>
+                {formatCost(p.cost_minor, p.currency)}
+              </td>
               <td>{p.unpriced_count}</td>
             </tr>
           ))}

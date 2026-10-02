@@ -76,7 +76,12 @@ export interface SseClientOptions {
   baseUrl: string;
   runId: string;
   initialCursor?: Cursor | null;
-  hmacSecret?: string;
+  // authToken 是后端签发的 JWT，作 Authorization: Bearer 发出。
+  // 空表示本部署未启用鉴权（装配层补 demo 身份）。
+  authToken?: string;
+  // sessionId 走 X-Session-ID，与令牌分离：会话是「这一次浏览」的上下文，
+  // 不属于「你是谁」这份长期身份。
+  sessionId?: string;
   onEvent: (ev: RunEvent) => void;
   onError: (err: SseError) => void;
   signal?: AbortSignal;

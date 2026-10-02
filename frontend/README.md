@@ -30,7 +30,7 @@ npm run e2e       # Playwright（mock 后端事件，无需真实模型）
 src/
 ├── app/          # 顶层 shell / 路由 / ErrorBoundary
 ├── features/     # 业务视图（shop / a2ui / observability）
-├── lib/          # SSE 客户端 / HMAC / cursor
+├── lib/          # SSE 客户端 / 鉴权头（Bearer JWT）/ cursor
 ├── components/   # 通用组件
 ├── types/        # 后端 JSON 对应 TS 类型（与 snake_case 一一对应）
 └── test/         # vitest setup

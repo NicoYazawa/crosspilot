@@ -12,7 +12,8 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      '/agui':          { target: 'http://localhost:8000', changeOrigin: true },
+      // /commerce 同时覆盖交易链路与 AG-UI 子应用（/commerce/ag-ui/*）。
+      '/commerce':      { target: 'http://localhost:8000', changeOrigin: true },
       '/observability': { target: 'http://localhost:8000', changeOrigin: true },
     },
   },

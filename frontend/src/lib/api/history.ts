@@ -18,6 +18,14 @@ export interface RunHistoryItem {
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    // indexedDB 在两种环境里不存在：jsdom（单测）与隐私模式下的部分浏览器。
+    // 不先判一下的话，这里抛的是 TypeError: indexedDB is not defined，
+    // 混在一堆断言失败里很难看出「这个环境根本没有 IndexedDB」。
+    // 抛出可读的 reject，让调用方按「本地历史不可用」处理。
+    if (typeof indexedDB === 'undefined') {
+      reject(new Error('本地历史不可用：此环境没有 IndexedDB'));
+      return;
+    }
     const req = indexedDB.open(DB_NAME, 1);
     req.onupgradeneeded = () => {
       const db = req.result;

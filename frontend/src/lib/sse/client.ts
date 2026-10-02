@@ -2,7 +2,7 @@
 //
 // 设计要点：
 //   1. 协议：EventSource 原生 API 不支持自定义请求头 + body，所以用 fetch +
-//      ReadableStream 自行解析 SSE 帧。HMAC 头由 buildHmacHeaders 注入。
+//      ReadableStream 自行解析 SSE 帧。鉴权头由 buildAuthHeaders 注入。
 //   2. 跨 run 拒绝：进入 connect 前用 bindToRun 校验 cursor.runId === runId。
 //   3. seq 缺口：每条事件 seq 必须 == lastSeq+1，否则调用 onError(gap) 并停。
 //   4. live tail fallback：SSE 解析到流尾（服务端关闭连接）时启动 polling，
@@ -23,7 +23,7 @@ import type {
 } from './types';
 import { TERMINAL_KINDS } from './types';
 import { bindToRun, parseCursor } from './cursor';
-import { buildHmacHeaders } from './hmac';
+import { buildAuthHeaders } from '../auth';
 
 interface ActiveState {
   abortController: AbortController;
@@ -107,7 +107,7 @@ export class RecoveringSseClient {
     const state = this.state;
     if (!state) return;
 
-    const path = `/agui/runs/${encodeURIComponent(this.opts.runId)}/events`;
+    const path = `/commerce/ag-ui/runs/${encodeURIComponent(this.opts.runId)}/events`;
     const base = this.opts.baseUrl || window.location.href;
     const url = new URL(path, base);
     if (since > 0) {
@@ -116,15 +116,8 @@ export class RecoveringSseClient {
 
     const headers: Record<string, string> = {
       Accept: 'text/event-stream',
+      ...buildAuthHeaders(this.opts.authToken, this.opts.sessionId),
     };
-    if (this.opts.hmacSecret) {
-      const hmacHeaders = await buildHmacHeaders({
-        method: 'GET',
-        path: url.pathname,
-        secret: this.opts.hmacSecret,
-      });
-      Object.assign(headers, hmacHeaders);
-    }
 
     const response = await fetch(url.toString(), {
       method: 'GET',
@@ -253,16 +246,11 @@ export class RecoveringSseClient {
     const tick = async (): Promise<void> => {
       if (state.closed) return;
       try {
-        const metaUrl = new URL(`/agui/runs/${encodeURIComponent(this.opts.runId)}`, this.opts.baseUrl || window.location.href);
-        const headers: Record<string, string> = { Accept: 'application/json' };
-        if (this.opts.hmacSecret) {
-          const hmacHeaders = await buildHmacHeaders({
-            method: 'GET',
-            path: metaUrl.pathname,
-            secret: this.opts.hmacSecret,
-          });
-          Object.assign(headers, hmacHeaders);
-        }
+        const metaUrl = new URL(`/commerce/ag-ui/runs/${encodeURIComponent(this.opts.runId)}`, this.opts.baseUrl || window.location.href);
+        const headers: Record<string, string> = {
+          Accept: 'application/json',
+          ...buildAuthHeaders(this.opts.authToken, this.opts.sessionId),
+        };
         const res = await fetch(metaUrl.toString(), {
           method: 'GET',
           headers,
