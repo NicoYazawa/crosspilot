@@ -42,8 +42,6 @@ const (
 	sqlStateSerializationFailure = "40001"
 	sqlStateDeadlockDetected     = "40P01"
 	sqlStateUniqueViolation      = "23505"
-	sqlStateCheckViolation       = "23514"
-	sqlStateForeignKeyViolation  = "23503"
 )
 
 // Config 是构造存储所需的依赖。
@@ -123,9 +121,6 @@ func New(cfg Config) (*Store, error) {
 		observe:     cfg.ObserveTransaction,
 	}, nil
 }
-
-// Now 返回存储当前使用的时间。
-func (s *Store) Now() time.Time { return s.clock.Now() }
 
 // fault 触发故障注入点。
 func (s *Store) fault(operation string, point FaultPoint) error {

@@ -54,12 +54,6 @@ var (
 	ErrNotHeld = errors.New("lease: 租约未持有")
 )
 
-// Unavailable 报告后端（Redis）是否不可用。
-//
-// 调用方据此区分「抢不到」与「后端不可用」：前者是正常的并发结果，
-// 后者需要降级到单进程模式而不是拒绝服务。
-type Unavailable func() bool
-
 // Backend 是租约的存储后端。
 //
 // 三个方法都必须是原子的：Acquire 用「不存在才设置」，Renew 用

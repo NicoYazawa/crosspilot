@@ -9,17 +9,23 @@
 //
 // 这是「不依赖外部观测栈也能跑」的物理保证——P5 阶段先把指标形态定下来，
 // 后期接 prometheus 时只需新增一个 handler，不必改 Emitter 计数路径。
+
 package observability
 
 import (
 	"expvar"
+	"sync"
 	"sync/atomic"
 )
 
 // Metrics 是观测通道的计数器集合。
 //
-// Emitter 持有一个；多个 Emitter 实例时各自一份（按 sink 分桶）。
 // 调用方通过 Snapshot() 读快照，不会阻塞 Emitter 自身。
+//
+// 命名是进程全局的：expvar 注册表本身只有一份扁平命名空间（/debug/vars 就是
+// 它），所以同一个 name 构造出的多个 Metrics 共享同一组计数器，而不是各自
+// 分桶。这是 expvar 的模型，不是本类型的取舍——要按 sink 分桶就得换一套
+// 带标签的指标库（P5 明确不引入 prometheus 客户端）。
 type Metrics struct {
 	QueueDepth   *expvar.Int  // 当前 channel 队列长度
 	DroppedTotal *expvar.Int  // 累计 dropped 事件数（任意 reason）
@@ -28,17 +34,39 @@ type Metrics struct {
 	redactErrors atomic.Int64 // 累计脱敏失败次数（内部用，不暴露 expvar）
 }
 
+// metricsMu 串行化注册，让 NewMetrics 在并发调用下也不会撞进 expvar 的
+// 「名字已注册」panic。
+var metricsMu sync.Mutex
+
 // NewMetrics 构造并注册一组 expvar 指标。
 //
-// 命名规则：observability.{field}，避免与 OTel 标准指标冲突。
+// 命名规则：{name}_{field}。
+//
+// 幂等：同一个 name 重复调用返回同一组计数器。expvar.NewInt 对已存在的名字
+// 直接 panic，而进程里可能不止装配一次（测试、以及将来多实例同进程部署），
+// 让一个「读指标」的动作把进程打挂是不可接受的失败模式。
 func NewMetrics(name string) *Metrics {
-	m := &Metrics{
-		QueueDepth:   expvar.NewInt(name + "_queue_depth"),
-		DroppedTotal: expvar.NewInt(name + "_dropped_total"),
-		EmitTotal:    expvar.NewInt(name + "_emit_total"),
-		EmitErrors:   expvar.NewInt(name + "_emit_errors_total"),
+	metricsMu.Lock()
+	defer metricsMu.Unlock()
+	return &Metrics{
+		QueueDepth:   newExpvarInt(name + "_queue_depth"),
+		DroppedTotal: newExpvarInt(name + "_dropped_total"),
+		EmitTotal:    newExpvarInt(name + "_emit_total"),
+		EmitErrors:   newExpvarInt(name + "_emit_errors_total"),
 	}
-	return m
+}
+
+// newExpvarInt 取回已注册的计数器，没有才新建。
+//
+// 调用方须持有 metricsMu。类型不符时（同名变量被别人注册成非 Int）退化成
+// 新建前的原样报错：这种情况下「指标错乱」比「启动时明确 panic」更难查。
+func newExpvarInt(name string) *expvar.Int {
+	if v := expvar.Get(name); v != nil {
+		if i, ok := v.(*expvar.Int); ok {
+			return i
+		}
+	}
+	return expvar.NewInt(name)
 }
 
 // AddDropped 累计 dropped 数（供 Emitter 调用）。
@@ -81,7 +109,7 @@ func (m *Metrics) SetQueueDepth(depth int) {
 	m.QueueDepth.Set(int64(depth))
 }
 
-// Snapshot 返回当前指标的快照（JSON 友好）。
+// MetricsSnapshot 是当前指标的快照，可直接 JSON 序列化。
 type MetricsSnapshot struct {
 	QueueDepth   int64 `json:"queue_depth"`
 	DroppedTotal int64 `json:"dropped_total"`

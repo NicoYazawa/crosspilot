@@ -18,11 +18,11 @@ func TestD3_AssertionRejectionBeforeTimeout(t *testing.T) {
 	h := Chain{
 		Outer: []Middleware{Harness(HarnessOpts{
 			Assertions: []Assertion{
-				func(ctx context.Context) error { return errors.New("断言拒绝") },
+				func(_ context.Context) error { return errors.New("断言拒绝") },
 			},
 			Timeout: 200 * time.Millisecond,
 		})},
-	}.Apply(func(ctx context.Context) error {
+	}.Apply(func(_ context.Context) error {
 		handlerRan.Store(true)
 		return nil
 	})
@@ -121,7 +121,7 @@ func TestResilience_RetriesTransientOnly(t *testing.T) {
 			MaxAttempts: 3,
 			Backoff:     1 * time.Millisecond,
 		})},
-	}.Apply(func(ctx context.Context) error {
+	}.Apply(func(_ context.Context) error {
 		n := calls.Add(1)
 		if n < 2 {
 			return breaker.ErrTransient
@@ -147,7 +147,7 @@ func TestResilience_NoRetryOnBusinessError(t *testing.T) {
 			Breaker:     breaker.New(10, time.Second, breaker.IsClosedError),
 			MaxAttempts: 3,
 		})},
-	}.Apply(func(ctx context.Context) error {
+	}.Apply(func(_ context.Context) error {
 		calls.Add(1)
 		return business
 	})
@@ -171,7 +171,7 @@ func TestResilience_BreakerTrips(t *testing.T) {
 			MaxAttempts: 3,
 			Backoff:     1 * time.Millisecond,
 		})},
-	}.Apply(func(ctx context.Context) error {
+	}.Apply(func(_ context.Context) error {
 		return breaker.ErrTransient
 	})
 
@@ -181,5 +181,126 @@ func TestResilience_BreakerTrips(t *testing.T) {
 	err := h(context.Background())
 	if !errors.Is(err, breaker.ErrOpen) {
 		t.Fatalf("熔断后应返回 ErrOpen，got %v", err)
+	}
+}
+
+// TestTimeoutError_Error_Unwrap 验证 timeoutErr 的 Error 和 Unwrap 方法。
+func TestTimeoutError_Error_Unwrap(t *testing.T) {
+	inner := context.DeadlineExceeded
+	wrapped := wrapTimeout(inner)
+
+	if wrapped == nil {
+		t.Fatal("wrapTimeout 不应返回 nil")
+	}
+	if !errors.Is(wrapped, context.DeadlineExceeded) {
+		t.Error("Unwrap 应返回原始 context.DeadlineExceeded")
+	}
+
+	// unwrapped 再次 unwrap
+	if !errors.Is(errors.Unwrap(wrapped), inner) {
+		t.Error("Unwrap 层级不对")
+	}
+}
+
+// TestIsTimeout_DirectDeadlineExceeded 验证 IsTimeout 能识别直接传入的 DeadlineExceeded。
+func TestIsTimeout_DirectDeadlineExceeded(t *testing.T) {
+	if !IsTimeout(context.DeadlineExceeded) {
+		t.Error("IsTimeout 应识别 context.DeadlineExceeded")
+	}
+	if IsTimeout(nil) {
+		t.Error("IsTimeout 对 nil 应返回 false")
+	}
+	if IsTimeout(errors.New("其他错误")) {
+		t.Error("IsTimeout 对普通错误应返回 false")
+	}
+}
+
+// TestIsTimeout_WrappedTimeout 验证 IsTimeout 能识别包装后的超时错误。
+func TestIsTimeout_WrappedTimeout(t *testing.T) {
+	wrapped := wrapTimeout(context.DeadlineExceeded)
+	if !IsTimeout(wrapped) {
+		t.Error("IsTimeout 应识别包装后的超时错误")
+	}
+}
+
+// TestResilience_TimeoutReturnsWrappedError 验证超时错误被正确包装后返回。
+func TestResilience_TimeoutReturnsWrappedError(t *testing.T) {
+	h := Chain{
+		Outer: []Middleware{Harness(HarnessOpts{Timeout: 10 * time.Millisecond})},
+		Inner: []Middleware{Resilience(ResilienceOpts{
+			MaxAttempts: 1,
+		})},
+	}.Apply(func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+			return nil
+		}
+	})
+
+	err := h(context.Background())
+	if !IsTimeout(err) {
+		t.Fatalf("超时错误应被包装，got %v", err)
+	}
+}
+
+// TestResilience_MaxAttemptsDefaultsToOne 验证 MaxAttempts <= 0 时默认为 1。
+func TestResilience_MaxAttemptsDefaultsToOne(t *testing.T) {
+	var calls int
+	h := Chain{
+		Inner: []Middleware{Resilience(ResilienceOpts{
+			MaxAttempts: 0,
+			Backoff:     1 * time.Millisecond,
+		})},
+	}.Apply(func(_ context.Context) error {
+		calls++
+		return breaker.ErrTransient
+	})
+
+	_ = h(context.Background())
+	// 0 被当作 1，所以只调用一次
+	if calls != 1 {
+		t.Errorf("MaxAttempts=0 应默认为 1，只调用 1 次，got %d", calls)
+	}
+}
+
+// TestHarness_ZeroTimeout 验证 Timeout=0 时不设置超时上下文。
+func TestHarness_ZeroTimeout(t *testing.T) {
+	var hasDeadline atomic.Bool
+	h := Chain{
+		Outer: []Middleware{Harness(HarnessOpts{Timeout: 0})},
+	}.Apply(func(ctx context.Context) error {
+		if _, ok := ctx.Deadline(); ok {
+			hasDeadline.Store(true)
+		}
+		return nil
+	})
+
+	if err := h(context.Background()); err != nil {
+		t.Fatalf("不应报错，got %v", err)
+	}
+	if hasDeadline.Load() {
+		t.Error("Timeout=0 时 ctx 不应有 deadline")
+	}
+}
+
+// TestResilience_ContextCancelled 验证 ctx 被取消时立即返回。
+func TestResilience_ContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // 先取消
+
+	h := Chain{
+		Inner: []Middleware{Resilience(ResilienceOpts{
+			MaxAttempts: 3,
+			Backoff:     10 * time.Millisecond,
+		})},
+	}.Apply(func(_ context.Context) error {
+		return breaker.ErrTransient
+	})
+
+	err := h(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ctx 已取消应返回 Canceled，got %v", err)
 	}
 }

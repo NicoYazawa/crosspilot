@@ -56,9 +56,10 @@ func (f *fakeOrch) Run(_ context.Context, cfg orchestrator.Config) (orchestrator
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.called++
-	for _, ev := range f.events {
+	// 按下标取址：orchestrator.Event 约 128 字节，逐条拷贝只是白给。
+	for i := range f.events {
 		if cfg.OnEvent != nil {
-			cfg.OnEvent(ev)
+			cfg.OnEvent(f.events[i])
 		}
 	}
 	if f.runErr != nil {
@@ -255,6 +256,124 @@ func TestBridge_EmitterReceivesEveryJournalEvent(t *testing.T) {
 		if rec.RunID != "r-emit" {
 			t.Errorf("第 %d 条 run_id 不对，实际 %q", i, rec.RunID)
 		}
+	}
+}
+
+// fakeClock 测试辅助：返回固定时间。
+type fakeClock struct{ t time.Time }
+
+func (f fakeClock) Now() time.Time { return f.t }
+
+// partialFailJournal 前 N 次 Append 成功，第 N+1 次起失败。
+type partialFailJournal struct {
+	mu       sync.Mutex
+	events   map[string][]runevent.Event
+	lastSeq  map[string]int64
+	failFrom int // 从这个序号起开始失败（按整个 run 的 Append 次数计）
+	called   int
+}
+
+func newPartialFailJournal(failFrom int) *partialFailJournal {
+	return &partialFailJournal{
+		events:   map[string][]runevent.Event{},
+		lastSeq:  map[string]int64{},
+		failFrom: failFrom,
+	}
+}
+
+func (j *partialFailJournal) Append(_ context.Context, ev runevent.Event) (int64, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.called++
+	if j.called > j.failFrom {
+		return 0, errors.New("journal partial failure")
+	}
+	j.events[ev.RunID] = append(j.events[ev.RunID], ev)
+	j.lastSeq[ev.RunID] = ev.Seq
+	return ev.Seq, nil
+}
+
+func (j *partialFailJournal) Since(_ context.Context, runID string, since int64, _ int) ([]runevent.Event, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	src := j.events[runID]
+	out := make([]runevent.Event, 0, len(src))
+	for _, ev := range src {
+		if ev.Seq >= since {
+			out = append(out, ev)
+		}
+	}
+	return out, nil
+}
+
+// TestBridge_Now_WithClock 验证 Clock mock 时使用 b.C.Now() 而非 time.Now()。
+func TestBridge_Now_WithClock(t *testing.T) {
+	o := &fakeOrch{}
+	j := newFakeJournal()
+	fixed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	b := &orderflow.Bridge{
+		Orch:         o,
+		J:            j,
+		C:            fakeClock{t: fixed},
+		DefaultAgent: "main",
+	}
+
+	evs, err := b.Run(context.Background(), orderflow.RunnerConfig{
+		RunID: "r-clock", SessionID: "s", Query: "test",
+	})
+	if err != nil {
+		t.Fatalf("Run 失败：%v", err)
+	}
+	if len(evs) == 0 {
+		t.Fatal("journal 中应有事件")
+	}
+	// run_start 事件的 CreatedAt 应为 fixed 时间
+	if !evs[0].CreatedAt.Equal(fixed) {
+		t.Errorf("run_start.CreatedAt = %v，期望 %v", evs[0].CreatedAt, fixed)
+	}
+}
+
+// TestBridge_Forward_JAppendError 验证 forward 中 J.Append 失败时不 panic（错误被吞掉）。
+func TestBridge_Forward_JAppendError(t *testing.T) {
+	o := &fakeOrch{
+		events: []orchestrator.Event{
+			{Kind: orchestrator.KindModelTurn, Agent: "main", Content: "hello"},
+		},
+	}
+	// failFrom=2：run_start(1)成功，model_turn的forward(2)失败，run_finished(3)成功
+	j := newPartialFailJournal(2)
+	b := &orderflow.Bridge{Orch: o, J: j, DefaultAgent: "main"}
+
+	// forward 中 J.Append 失败，forward 内部 return，不 panic
+	evs, err := b.Run(context.Background(), orderflow.RunnerConfig{
+		RunID: "r-err", SessionID: "s", Query: "test",
+	})
+	// forward 的 J.Append 失败被吞；run_finished 的 Append 也失败时 Run 报错
+	// （因为 err == nil 时 err2 != nil 会覆盖 err）
+	if err == nil {
+		t.Fatal("run_finished Append 也失败时 Run 应返回错误")
+	}
+	// 已写入的事件（run_start + model_turn 的 forward 成功）应仍在
+	if len(evs) < 2 {
+		t.Errorf("run_start 和部分 forward 事件应落 journal，实际 %d 条", len(evs))
+	}
+}
+
+// TestBridge_Forward_OrchestratorReturnsError 验证 orchestrator 报错时 finishKind 为 run_error。
+func TestBridge_Forward_OrchestratorReturnsError(t *testing.T) {
+	o := &fakeOrch{runErr: errors.New("context deadline exceeded")}
+	j := newFakeJournal()
+	b := &orderflow.Bridge{Orch: o, J: j, DefaultAgent: "main"}
+
+	evs, err := b.Run(context.Background(), orderflow.RunnerConfig{
+		RunID: "r-orch-err", SessionID: "s", Query: "test",
+	})
+	if err == nil {
+		t.Fatal("orchestrator 返回错误时 Run 应传播错误")
+	}
+	last := evs[len(evs)-1]
+	if last.Kind != runevent.KindRunError {
+		t.Errorf("末事件应为 run_error，实际 %v", last.Kind)
 	}
 }
 

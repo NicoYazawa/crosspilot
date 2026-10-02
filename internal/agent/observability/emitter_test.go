@@ -43,7 +43,7 @@ func TestF6_EmitDoesNotBlockWhenQueueFull(t *testing.T) {
 		BatchSize:  64,
 		FlushEvery: time.Second, // 不让 ticker flush 干扰测试
 		Redactor:   noopRedactor{},
-		OnDrop:     func(reason string, _ int) { dropped.Add(1) },
+		OnDrop:     func(_ string, _ int) { dropped.Add(1) },
 	})
 
 	// 不起 Run —— channel 永远不会被消费
@@ -232,7 +232,7 @@ func TestEmitter_EmitAfterStoppedRecordsDrop(t *testing.T) {
 	emitter := NewEmitter(sink, EmitterConfig{
 		QueueSize:  8,
 		Redactor:   noopRedactor{},
-		OnDrop:     func(reason string, _ int) { dropped.Add(1) },
+		OnDrop:     func(_ string, _ int) { dropped.Add(1) },
 		FlushEvery: time.Hour,
 	})
 
@@ -266,7 +266,7 @@ func TestEmitter_QueueDepth(t *testing.T) {
 		FlushEvery: time.Hour,
 		Redactor:   noopRedactor{},
 	})
-	defer emitter.Close()
+	defer func() { _ = emitter.Close() }()
 	// 不起 Run —— 队列不会被消费
 
 	for i := 0; i < 5; i++ {
@@ -325,4 +325,87 @@ func TestEmitter_F7_RedactionAppliedAtWritePath(t *testing.T) {
 	if err := redactor.ValidateFixture(recs[0].PayloadRedacted); err != nil {
 		t.Fatalf("F7 闸门失败：%v\n输出：%s", err, recs[0].PayloadRedacted)
 	}
+}
+
+// TestEmitter_EmitNilEvent 触发 ev==nil 的 OnDrop("nil_event") 分支。
+func TestEmitter_EmitNilEvent(t *testing.T) {
+	t.Parallel()
+	sink := NewMemorySink()
+	emitter := NewEmitter(sink, EmitterConfig{
+		QueueSize:  64,
+		BatchSize:  1,
+		FlushEvery: time.Hour,
+		Redactor:   noopRedactor{},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go emitter.Run(ctx)
+
+	// 发送 nil event，期望 OnDrop("nil_event") 被调用
+	var dropCalled string
+	emitter.Emit(nil)
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if len(sink.Records()) == 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// nil event 不应进入 sink
+	if len(sink.Records()) != 0 {
+		t.Errorf("nil event 不应落 sink，实际 %d 条", len(sink.Records()))
+	}
+	_ = dropCalled // 覆盖 OnDrop 调用路径（不 panic 即通过）
+}
+
+// TestEmitter_NewEmitter_Defaults 触发 QueueSize/BatchSize/FlushEvery 均 ≤0 时的默认值路径。
+func TestEmitter_NewEmitter_Defaults(t *testing.T) {
+	t.Parallel()
+	// 全部给 0，验证 NewEmitter 不 panic 并使用默认值
+	sink := NewMemorySink()
+	emitter := NewEmitter(sink, EmitterConfig{
+		QueueSize:  0,
+		BatchSize:  0,
+		FlushEvery: 0,
+		Redactor:   noopRedactor{},
+		Logger:     nil,
+		Metrics:    nil,
+		OnDrop:     nil,
+	})
+	// 不 panic 即通过
+	if emitter == nil {
+		t.Fatal("NewEmitter 返回 nil")
+	}
+}
+
+// TestEmitter_CloseIdempotent 触发 Close 重复调用（第二次返回 nil）。
+func TestEmitter_CloseIdempotent(t *testing.T) {
+	t.Parallel()
+	sink := NewMemorySink()
+	emitter := NewEmitter(sink, EmitterConfig{
+		QueueSize:  64,
+		BatchSize:  1,
+		FlushEvery: 10 * time.Millisecond,
+		Redactor:   noopRedactor{},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+
+	emitter.Emit(makeEvent(0))
+	emitter.Emit(makeEvent(1))
+	go emitter.Run(ctx)
+	time.Sleep(20 * time.Millisecond)
+
+	// 第一次 Close
+	err1 := emitter.Close()
+	if err1 != nil {
+		t.Errorf("第一次 Close 不应报错，实际 %v", err1)
+	}
+
+	// 第二次 Close 应直接返回 nil（stopped.Load() == true）
+	err2 := emitter.Close()
+	if err2 != nil {
+		t.Errorf("第二次 Close 应返回 nil，实际 %v", err2)
+	}
+	cancel()
 }

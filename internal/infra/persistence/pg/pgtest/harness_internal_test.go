@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -366,6 +367,110 @@ func TestShortHashDiffersForDifferentInputs(t *testing.T) {
 
 	if len(seen) != len(inputs) {
 		t.Errorf("去重后得到 %d 个哈希，输入共 %d 个，说明存在碰撞或实现未区分输入", len(seen), len(inputs))
+	}
+}
+
+// unsetEnv 在本次测试期间清掉一个环境变量，结束后恢复原值（含「原本就不存在」）。
+//
+// 用 os.Unsetenv 而不是 t.Setenv("")：空串与「未设置」在本文件的逻辑里是两回事，
+// LookupEnv 能区分它们，而 pinDockerEndpoint 正是靠这个区分决定要不要写入。
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+
+	previous, existed := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("清除环境变量 %s 失败：%v", key, err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv(key, previous)
+			return
+		}
+		_ = os.Unsetenv(key)
+	})
+}
+
+// TestPinDockerEndpointOnlyOnWindows 断言钉端点的作用范围。
+//
+// 这两个变量只在 Windows 上是对的：npipe 在 Linux/CI 上根本不是合法的 docker 端点，
+// 一旦在没有 GOOS 判断的情况下设置，CI（Ubuntu）上所有集成测试都会连不上 docker——
+// 而且是「连不上 → 跳过」的静默失败，比直接报错更难查。
+//
+// goos 逐一喂进来（而不是断言 runtime.GOOS 的结果），是为了让「非 Windows 上什么都
+// 不做」这条分支在任何平台上都被真正执行到：只在本机跑，这条分支永远走不到，
+// 而它恰恰是 CI 上唯一生效的那条。
+func TestPinDockerEndpointOnlyOnWindows(t *testing.T) {
+	cases := []struct {
+		goos    string
+		wantSet bool
+	}{
+		{"windows", true},
+		{"linux", false},
+		{"darwin", false},
+		{"js", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.goos, func(t *testing.T) {
+			unsetEnv(t, EnvDockerHost)
+			unsetEnv(t, EnvDockerSocketOverride)
+
+			pinDockerEndpoint(tc.goos)
+
+			host, hostSet := os.LookupEnv(EnvDockerHost)
+			socket, socketSet := os.LookupEnv(EnvDockerSocketOverride)
+
+			if !tc.wantSet {
+				if hostSet || socketSet {
+					t.Fatalf("%s 上不应写入 docker 端点，却得到 %s=%q %s=%q",
+						tc.goos, EnvDockerHost, host, EnvDockerSocketOverride, socket)
+				}
+				return
+			}
+
+			if !hostSet || !socketSet {
+				t.Fatalf("%s 上应同时钉住两个变量，实际 %s set=%v、%s set=%v",
+					tc.goos, EnvDockerHost, hostSet, EnvDockerSocketOverride, socketSet)
+			}
+			if host != windowsDockerHost {
+				t.Errorf("%s = %q，期望 %q", EnvDockerHost, host, windowsDockerHost)
+			}
+			if socket != windowsDockerSocketPath {
+				t.Errorf("%s = %q，期望 %q", EnvDockerSocketOverride, socket, windowsDockerSocketPath)
+			}
+
+			// socket 值不能带 schema：testcontainers 的 checkDockerSocketFn 见到
+			// tcp:// 会**静默改写成** /var/run/docker.sock，见到 unix:// 或 npipe://
+			// 会把前缀剥掉——两种都会让这里钉的值与实际生效的值不一致，且看不出来。
+			if strings.Contains(socket, "://") {
+				t.Errorf("socket override 应为裸路径（带 schema 会被 testcontainers 改写或剥离）：%q", socket)
+			}
+			if !strings.HasPrefix(host, "npipe://") {
+				t.Errorf("Windows 上的 docker 端点应为 npipe 形式，得到 %q", host)
+			}
+		})
+	}
+}
+
+// TestPinDockerEndpointKeepsCallerValues 断言调用方显式设好的值不会被覆盖。
+//
+// 需要一个不完整的环境（例如指向远程 daemon、或 CI 上注入了自己的 socket 路径）时，
+// 覆盖掉它会让排查方向完全跑偏——而这类环境恰恰是最需要看清真实端点的地方。
+func TestPinDockerEndpointKeepsCallerValues(t *testing.T) {
+	const (
+		customHost   = "tcp://192.0.2.10:2375"
+		customSocket = "/run/custom/docker.sock"
+	)
+	t.Setenv(EnvDockerHost, customHost)
+	t.Setenv(EnvDockerSocketOverride, customSocket)
+
+	pinDockerEndpoint("windows")
+
+	if got := os.Getenv(EnvDockerHost); got != customHost {
+		t.Errorf("%s 被改写成 %q，调用方设好的 %q 必须原样保留", EnvDockerHost, got, customHost)
+	}
+	if got := os.Getenv(EnvDockerSocketOverride); got != customSocket {
+		t.Errorf("%s 被改写成 %q，调用方设好的 %q 必须原样保留", EnvDockerSocketOverride, got, customSocket)
 	}
 }
 

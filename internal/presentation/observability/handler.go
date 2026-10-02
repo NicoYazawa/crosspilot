@@ -47,21 +47,20 @@ func NewHandler(uc *observability.UseCases, metrics *agentobs.Metrics) *Handler 
 	return &Handler{UC: uc, Metrics: metrics}
 }
 
-// Routes 把可观测路由挂到 chi 路由器上。
+// Routes 返回可观测子路由，路径相对于挂载点。
 //
-// 期望调用方在 Routes 之外再加 RequestID / Recoverer / CORS 中间件。
-// 路径以 /observability 为前缀挂载：/observability/runs/{runID}/events 等。
+// 前缀不写在这里，由装配层用 Mount("/observability", ...) 决定：chi 对同一个
+// 挂载路径只允许挂一次，三个子应用若各自带着绝对前缀去挂 "/"，第二个就会
+// panic——而这正是「子路由自己声明前缀」这种写法必然会走到的死胡同。
 //
-// 设计：路由在 handler 内部组装，便于在容器层一次性注入 router 集合。
+// 期望调用方在挂载点之外再加 RequestID / Recoverer / CORS 中间件。
 func (h *Handler) Routes() http.Handler {
 	r := chi.NewRouter()
-	r.Route("/observability", func(r chi.Router) {
-		r.Get("/runs/{runID}/events", h.replayEvents)
-		r.Get("/runs/{runID}/cost", h.runCost)
-		r.Get("/runs/{runID}/diff", h.runDiff)
-		r.Get("/experiments/{key}/arms", h.experimentArms)
-		r.Get("/metrics", h.metrics)
-	})
+	r.Get("/runs/{runID}/events", h.replayEvents)
+	r.Get("/runs/{runID}/cost", h.runCost)
+	r.Get("/runs/{runID}/diff", h.runDiff)
+	r.Get("/experiments/{key}/arms", h.experimentArms)
+	r.Get("/metrics", h.metrics)
 	return r
 }
 

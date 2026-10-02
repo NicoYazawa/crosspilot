@@ -17,7 +17,11 @@ const (
 	filteredOutLimit = 3
 )
 
-type CatalogSearchUseCase struct {
+// UseCase 编排「精确 ID 查询 / 召回 → 过滤 → 重排 → 组卡」这条链路。
+//
+// 依赖全部可选：embedder/vectorIndex 缺失时自动退回关键词召回，reranker 缺失
+// 时保留召回原序——降级路径必须存在，否则向量服务不可用会整体不可用。
+type UseCase struct {
 	productRepo    ports.ProductRepository
 	embedder       ports.EmbeddingClient
 	vectorIndex    ports.ProductVectorIndex
@@ -25,17 +29,19 @@ type CatalogSearchUseCase struct {
 	tariffSchedule *shipping.TariffSchedule
 }
 
+// New 构造 UseCase；tariffSchedule 为 nil 时用无汇率表的默认档，
+// 让到手价计算在未装配汇率依赖时仍能跑出「不可用」而不是 panic。
 func New(
 	productRepo ports.ProductRepository,
 	embedder ports.EmbeddingClient,
 	vectorIndex ports.ProductVectorIndex,
 	reranker ports.Reranker,
 	tariffSchedule *shipping.TariffSchedule,
-) *CatalogSearchUseCase {
+) *UseCase {
 	if tariffSchedule == nil {
 		tariffSchedule = shipping.NewTariffSchedule(nil)
 	}
-	return &CatalogSearchUseCase{
+	return &UseCase{
 		productRepo:    productRepo,
 		embedder:       embedder,
 		vectorIndex:    vectorIndex,
@@ -44,7 +50,8 @@ func New(
 	}
 }
 
-func (uc *CatalogSearchUseCase) Execute(ctx context.Context, spec catalog.ProductSearchSpec) (SearchResult, error) {
+// Execute 按 spec 决定走精确 ID 查询还是召回检索，返回可渲染的商品卡。
+func (uc *UseCase) Execute(ctx context.Context, spec catalog.ProductSearchSpec) (SearchResult, error) {
 	if err := spec.Validate(); err != nil {
 		return SearchResult{}, err
 	}
@@ -55,7 +62,7 @@ func (uc *CatalogSearchUseCase) Execute(ctx context.Context, spec catalog.Produc
 	return uc.executeSearch(ctx, spec)
 }
 
-func (uc *CatalogSearchUseCase) executeSearch(ctx context.Context, spec catalog.ProductSearchSpec) (SearchResult, error) {
+func (uc *UseCase) executeSearch(ctx context.Context, spec catalog.ProductSearchSpec) (SearchResult, error) {
 	var scored []ScoredProduct
 	var recallStrategy string
 
@@ -78,8 +85,8 @@ func (uc *CatalogSearchUseCase) executeSearch(ctx context.Context, spec catalog.
 					return SearchResult{}, err
 				}
 				byID := make(map[string]catalog.Product, len(products))
-				for _, p := range products {
-					byID[p.ID] = p
+				for i := range products {
+					byID[products[i].ID] = products[i]
 				}
 				for _, hit := range hits {
 					if p, ok := byID[hit.ProductID]; ok {
@@ -117,7 +124,7 @@ func (uc *CatalogSearchUseCase) executeSearch(ctx context.Context, spec catalog.
 	}, nil
 }
 
-func (uc *CatalogSearchUseCase) executeExactIDs(ctx context.Context, spec catalog.ProductSearchSpec, identifiers []string) (SearchResult, error) {
+func (uc *UseCase) executeExactIDs(ctx context.Context, spec catalog.ProductSearchSpec, identifiers []string) (SearchResult, error) {
 	productIDs := make([]string, 0, len(identifiers))
 	seen := make(map[string]bool)
 	for _, id := range identifiers {
@@ -136,8 +143,8 @@ func (uc *CatalogSearchUseCase) executeExactIDs(ctx context.Context, spec catalo
 		return SearchResult{}, err
 	}
 	byID := make(map[string]catalog.Product, len(products))
-	for _, p := range products {
-		byID[p.ID] = p
+	for i := range products {
+		byID[products[i].ID] = products[i]
 	}
 
 	var hits []ProductCard
@@ -181,14 +188,14 @@ func (uc *CatalogSearchUseCase) executeExactIDs(ctx context.Context, spec catalo
 	return result, nil
 }
 
-func (uc *CatalogSearchUseCase) rerank(ctx context.Context, query string, scored []ScoredProduct) ([]ScoredProduct, error) {
+func (uc *UseCase) rerank(ctx context.Context, query string, scored []ScoredProduct) ([]ScoredProduct, error) {
 	if uc.reranker == nil {
 		return nil, errRerankerNotConfigured
 	}
 
 	products := make([]catalog.Product, len(scored))
-	for i, s := range scored {
-		products[i] = s.Product
+	for i := range scored {
+		products[i] = scored[i].Product
 	}
 
 	rerankScores, err := uc.reranker.Rerank(ctx, query, products)
@@ -201,8 +208,8 @@ func (uc *CatalogSearchUseCase) rerank(ctx context.Context, query string, scored
 	}
 
 	reranked := make([]ScoredProduct, len(scored))
-	for i, s := range scored {
-		reranked[i] = ScoredProduct{Score: rerankScores[i], Product: s.Product}
+	for i := range scored {
+		reranked[i] = ScoredProduct{Score: rerankScores[i], Product: scored[i].Product}
 	}
 
 	slices.SortFunc(reranked, func(a, b ScoredProduct) int {
@@ -218,7 +225,7 @@ func (uc *CatalogSearchUseCase) rerank(ctx context.Context, query string, scored
 	return reranked, nil
 }
 
-func (uc *CatalogSearchUseCase) keywordRecall(ctx context.Context, spec catalog.ProductSearchSpec) ([]ScoredProduct, string) {
+func (uc *UseCase) keywordRecall(ctx context.Context, spec catalog.ProductSearchSpec) ([]ScoredProduct, string) {
 	queryTerms := tokenize(spec.NormalizedQuery)
 	allProducts, err := uc.productRepo.ListAll(ctx)
 	if err != nil {
@@ -226,10 +233,10 @@ func (uc *CatalogSearchUseCase) keywordRecall(ctx context.Context, spec catalog.
 	}
 
 	var candidates []ScoredProduct
-	for _, product := range allProducts {
-		score := keywordScore(queryTerms, product, spec)
+	for i := range allProducts {
+		score := keywordScore(queryTerms, allProducts[i], spec)
 		if score > 0 {
-			candidates = append(candidates, ScoredProduct{Score: float32(score), Product: product})
+			candidates = append(candidates, ScoredProduct{Score: float32(score), Product: allProducts[i]})
 		}
 	}
 
@@ -246,24 +253,24 @@ func (uc *CatalogSearchUseCase) keywordRecall(ctx context.Context, spec catalog.
 	return candidates, "keyword_2gram"
 }
 
-func (uc *CatalogSearchUseCase) applyFilters(scored []ScoredProduct, spec catalog.ProductSearchSpec) ([]ScoredProduct, []FilteredOut) {
+func (uc *UseCase) applyFilters(scored []ScoredProduct, spec catalog.ProductSearchSpec) ([]ScoredProduct, []FilteredOut) {
 	var filtered []ScoredProduct
 	var filteredOut []FilteredOut
 
-	for _, s := range scored {
-		primary := s.Product.PrimaryAvailableSKU()
-		reason := uc.rejectReason(s.Product, spec, primary)
+	for i := range scored {
+		primary := scored[i].Product.PrimaryAvailableSKU()
+		reason := uc.rejectReason(scored[i].Product, spec, primary)
 		if reason == "" {
-			filtered = append(filtered, s)
+			filtered = append(filtered, scored[i])
 		} else if len(filteredOut) < filteredOutLimit {
-			filteredOut = append(filteredOut, uc.toFilteredOut(s.Product, spec, reason, primary))
+			filteredOut = append(filteredOut, uc.toFilteredOut(scored[i].Product, spec, reason, primary))
 		}
 	}
 
 	return filtered, filteredOut
 }
 
-func (uc *CatalogSearchUseCase) rejectReason(product catalog.Product, spec catalog.ProductSearchSpec, primary catalog.SKU) string {
+func (uc *UseCase) rejectReason(product catalog.Product, spec catalog.ProductSearchSpec, primary catalog.SKU) string {
 	if primary.ID != "" && primary.Stock <= 0 {
 		return "requested_sku_out_of_stock"
 	}
@@ -298,7 +305,7 @@ func (uc *CatalogSearchUseCase) rejectReason(product catalog.Product, spec catal
 	return ""
 }
 
-func (uc *CatalogSearchUseCase) withinPriceCap(product catalog.Product, spec catalog.ProductSearchSpec, primary catalog.SKU) bool {
+func (uc *UseCase) withinPriceCap(product catalog.Product, spec catalog.ProductSearchSpec, primary catalog.SKU) bool {
 	if spec.PriceMaxMajor == nil {
 		return true
 	}
@@ -309,7 +316,7 @@ func (uc *CatalogSearchUseCase) withinPriceCap(product catalog.Product, spec cat
 	return price.ToMajorUnitsFloat() <= *spec.PriceMaxMajor
 }
 
-func (uc *CatalogSearchUseCase) toFilteredOut(product catalog.Product, spec catalog.ProductSearchSpec, reason string, primary catalog.SKU) FilteredOut {
+func (uc *UseCase) toFilteredOut(product catalog.Product, spec catalog.ProductSearchSpec, reason string, primary catalog.SKU) FilteredOut {
 	price := product.Price()
 	if primary.ID != "" {
 		price = primary.Price
@@ -319,26 +326,24 @@ func (uc *CatalogSearchUseCase) toFilteredOut(product catalog.Product, spec cata
 		Title:      product.Title,
 		Category:   product.Category,
 		PriceMajor: price.ToMajorUnitsFloat(),
-		Currency:   catalog.Currency(spec.TargetCurrency),
+		Currency:   spec.TargetCurrency,
 		Reason:     reason,
 	}
 }
 
-func (uc *CatalogSearchUseCase) toCard(score float32, product catalog.Product, spec catalog.ProductSearchSpec) ProductCard {
+func (uc *UseCase) toCard(score float32, product catalog.Product, spec catalog.ProductSearchSpec) ProductCard {
 	primary := product.PrimaryAvailableSKU()
 	return uc.toCardWithSKU(score, product, spec, primary)
 }
 
-func (uc *CatalogSearchUseCase) toCardWithSKU(score float32, product catalog.Product, spec catalog.ProductSearchSpec, primary catalog.SKU) ProductCard {
+func (uc *UseCase) toCardWithSKU(score float32, product catalog.Product, spec catalog.ProductSearchSpec, primary catalog.SKU) ProductCard {
 	price := product.Price()
 	if primary.ID != "" {
 		price = primary.Price
 	}
 
 	highlights := make([]string, 0, len(product.Highlights))
-	for _, h := range product.Highlights {
-		highlights = append(highlights, h)
-	}
+	highlights = append(highlights, product.Highlights...)
 
 	skus := make([]catalog.SKUInfo, len(product.SKUs))
 	for i, s := range product.SKUs {
@@ -475,22 +480,24 @@ func keywordScore(queryTerms []string, product catalog.Product, spec catalog.Pro
 	return score
 }
 
+// ScoredProduct 是召回/重排链路上「商品 + 得分」的中间态。
 type ScoredProduct struct {
 	Score   float32
 	Product catalog.Product
 }
 
+// SearchResult 是检索用例的返回值：命中卡、被过滤项与召回策略等元数据。
 type SearchResult struct {
-	Hits                 []ProductCard
-	TotalCandidates      int
-	RecallStrategy       string
-	RerankApplied        bool
-	FilteredOut          []FilteredOut
-	MissingIdentifiers   []string
-	RequestedIdentifiers []string
-	ExistenceChecked     bool
+	Hits               []ProductCard
+	TotalCandidates    int
+	RecallStrategy     string
+	RerankApplied      bool
+	FilteredOut        []FilteredOut
+	MissingIdentifiers []string
+	ExistenceChecked   bool
 }
 
+// FilteredOut 是被过滤掉的候选及其原因，供前端解释「为何没推荐它」。
 type FilteredOut struct {
 	ProductID  string           `json:"product_id"`
 	Title      string           `json:"title"`
@@ -500,6 +507,7 @@ type FilteredOut struct {
 	Reason     string           `json:"reason"`
 }
 
+// ProductCard 是写给前端的商品卡契约（snake_case JSON tag 与前端对齐）。
 type ProductCard struct {
 	ProductID          string             `json:"product_id"`
 	Title              string             `json:"title"`
@@ -533,6 +541,7 @@ type ProductCard struct {
 	DataProvenance     string             `json:"data_provenance,omitempty"`
 }
 
+// SKUInfo 是商品卡内的 SKU 明细：规格、价格、库存。
 type SKUInfo struct {
 	SKUID      string  `json:"sku_id"`
 	Spec       string  `json:"spec"`
@@ -541,6 +550,7 @@ type SKUInfo struct {
 	Stock      int     `json:"stock"`
 }
 
+// LandedPriceInfo 是跨境到手价拆解：商品小计、运费、关税与合计。
 type LandedPriceInfo struct {
 	SubtotalMajor     float64 `json:"subtotal_major,omitempty"`
 	ShippingMajor     float64 `json:"shipping_major,omitempty"`
@@ -565,11 +575,4 @@ func (e *useCaseError) Code() string  { return e.code }
 func (e *useCaseError) Is(target error) bool {
 	ue, ok := target.(*useCaseError)
 	return ok && ue.code == e.code
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

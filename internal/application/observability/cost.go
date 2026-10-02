@@ -3,6 +3,7 @@
 // F4「unpriced 显式」：未命中价格表的调用不静默按 0 计，而是 UnpricedCount++
 // 并体现在 summary 里。这是给运营/财务的诚实默认值——总成本只统计已定价部分，
 // 未定价部分单独计数，绝不假报 0。
+
 package observability
 
 import "context"
@@ -60,7 +61,8 @@ func (uc *UseCases) CostOfRun(ctx context.Context, runID string) (CostSummary, e
 	}
 
 	byProvider := make(map[string]*ProviderBreakdown)
-	for _, ev := range events {
+	for i := range events {
+		ev := &events[i]
 		if ev.Unpriced {
 			summary.UnpricedCount++
 		}

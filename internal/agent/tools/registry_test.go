@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -20,7 +21,7 @@ func TestToolRegistryValidateResult(t *testing.T) {
 
 	t.Run("product_search_tool missing required field", func(t *testing.T) {
 		result := ToolResult{
-			Content: json.RawMessage(`{"hits": []}`), // missing recall_strategy
+			Content: json.RawMessage(`{"hits": []}`),
 			State:   ResultStateSuccess,
 		}
 		err := reg.ValidateResult("product_search_tool", result)
@@ -100,4 +101,189 @@ func TestAllToolDefsComplete(t *testing.T) {
 			t.Errorf("missing tool: %s", name)
 		}
 	}
+}
+
+func TestRegistry_Get_NotFound(t *testing.T) {
+	reg := NewToolRegistry()
+	_, ok := reg.Get("nonexistent_tool")
+	if ok {
+		t.Error("Get nonexistent_tool 应返回 false")
+	}
+}
+
+func TestRegistry_All(t *testing.T) {
+	reg := NewToolRegistry()
+	defs := reg.All()
+	if len(defs) != 14 {
+		t.Errorf("All() 返回 %d 个工具，期望 14", len(defs))
+	}
+}
+
+func TestValidateResult_ErrorBranch(t *testing.T) {
+	reg := NewToolRegistry()
+
+	// unknown tool -> nil (skipped)
+	err := reg.ValidateResult("unknown_tool", ToolResult{State: ResultStateSuccess})
+	if err != nil {
+		t.Errorf("unknown tool 应跳过验证: %v", err)
+	}
+
+	// error state skips validation
+	result := ToolResult{
+		State: ResultStateError,
+		Error: "something failed",
+	}
+	err = reg.ValidateResult("product_search_tool", result)
+	if err != nil {
+		t.Errorf("error state 应跳过验证: %v", err)
+	}
+
+	// success but missing required field
+	result = ToolResult{
+		State:   ResultStateSuccess,
+		Content: json.RawMessage(`{}`),
+	}
+	err = reg.ValidateResult("product_search_tool", result)
+	if err == nil {
+		t.Error("缺少 required 字段应报错")
+	}
+	if !strings.Contains(err.Error(), "missing required field") {
+		t.Errorf("错误信息 = %q，期望含 'missing required field'", err.Error())
+	}
+
+	// success with invalid JSON
+	result = ToolResult{
+		State:   ResultStateSuccess,
+		Content: json.RawMessage(`{not json`),
+	}
+	err = reg.ValidateResult("product_search_tool", result)
+	if err == nil {
+		t.Error("非法 JSON 应报错")
+	}
+	if !strings.Contains(err.Error(), "not valid JSON") {
+		t.Errorf("错误信息 = %q，期望含 'not valid JSON'", err.Error())
+	}
+}
+
+func TestValidateSchema_InvalidBranches(t *testing.T) {
+	reg := NewToolRegistry()
+
+	t.Run("unknown tool", func(t *testing.T) {
+		err := reg.ValidateSchema("nonexistent_tool")
+		if err == nil {
+			t.Error("unknown tool 应报错")
+		}
+		if !strings.Contains(err.Error(), "unknown tool") {
+			t.Errorf("错误信息 = %q，期望含 'unknown tool'", err.Error())
+		}
+	})
+
+	t.Run("parameters type not object", func(t *testing.T) {
+		reg2 := &ToolRegistry{defs: map[string]ToolDef{
+			"bad_tool": {
+				Name:        "bad_tool",
+				Description: "test",
+				Parameters: ToolParameters{
+					Type:       "string",
+					Properties: map[string]ParameterDef{},
+				},
+			},
+		}}
+		err := reg2.ValidateSchema("bad_tool")
+		if err == nil {
+			t.Error("type != 'object' 应报错")
+		}
+		if !strings.Contains(err.Error(), "type must be 'object'") {
+			t.Errorf("错误信息 = %q，期望含 'type must be \\'object\\''", err.Error())
+		}
+	})
+
+	t.Run("parameter missing type", func(t *testing.T) {
+		reg2 := &ToolRegistry{defs: map[string]ToolDef{
+			"bad_tool": {
+				Name:        "bad_tool",
+				Description: "test",
+				Parameters: ToolParameters{
+					Type: "object",
+					Properties: map[string]ParameterDef{
+						"p1": {Description: "no type"},
+					},
+				},
+			},
+		}}
+		err := reg2.ValidateSchema("bad_tool")
+		if err == nil {
+			t.Error("缺少 type 应报错")
+		}
+		if !strings.Contains(err.Error(), "has no type") {
+			t.Errorf("错误信息 = %q，期望含 'has no type'", err.Error())
+		}
+	})
+
+	t.Run("array missing items", func(t *testing.T) {
+		reg2 := &ToolRegistry{defs: map[string]ToolDef{
+			"bad_tool": {
+				Name:        "bad_tool",
+				Description: "test",
+				Parameters: ToolParameters{
+					Type: "object",
+					Properties: map[string]ParameterDef{
+						"p1": {Type: "array"},
+					},
+				},
+			},
+		}}
+		err := reg2.ValidateSchema("bad_tool")
+		if err == nil {
+			t.Error("array 缺少 items 应报错")
+		}
+		if !strings.Contains(err.Error(), "missing items schema") {
+			t.Errorf("错误信息 = %q，期望含 'missing items schema'", err.Error())
+		}
+	})
+
+	t.Run("object missing properties and enum", func(t *testing.T) {
+		reg2 := &ToolRegistry{defs: map[string]ToolDef{
+			"bad_tool": {
+				Name:        "bad_tool",
+				Description: "test",
+				Parameters: ToolParameters{
+					Type: "object",
+					Properties: map[string]ParameterDef{
+						"p1": {Type: "object"},
+					},
+				},
+			},
+		}}
+		err := reg2.ValidateSchema("bad_tool")
+		if err == nil {
+			t.Error("object 缺少 properties 和 enum 应报错")
+		}
+		if !strings.Contains(err.Error(), "has no properties or enum") {
+			t.Errorf("错误信息 = %q，期望含 'has no properties or enum'", err.Error())
+		}
+	})
+
+	t.Run("required field not in properties", func(t *testing.T) {
+		reg2 := &ToolRegistry{defs: map[string]ToolDef{
+			"bad_tool": {
+				Name:        "bad_tool",
+				Description: "test",
+				Parameters: ToolParameters{
+					Type: "object",
+					Properties: map[string]ParameterDef{
+						"p1": {Type: "string"},
+					},
+					Required: []string{"nonexistent"},
+				},
+			},
+		}}
+		err := reg2.ValidateSchema("bad_tool")
+		if err == nil {
+			t.Error("required 字段不在 properties 应报错")
+		}
+		if !strings.Contains(err.Error(), "required parameter") {
+			t.Errorf("错误信息 = %q，期望含 'required parameter'", err.Error())
+		}
+	})
 }

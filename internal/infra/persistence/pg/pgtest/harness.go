@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -48,15 +49,43 @@ const (
 // EnvDatabaseURL 指向一个已存在的 Postgres，供无法运行容器时使用。
 const EnvDatabaseURL = "CROSSPILOT_TEST_POSTGRES"
 
-// EnvReaper 控制 testcontainers 的后台回收容器。
+// EnvReaper 控制 testcontainers 的后台回收容器 ryuk。
 //
-// 本脚手架在 admin 容器就绪时注册了进程退出钩子，正常退出时一定 Terminate，
-// 因此 ryuk 仅作「进程崩溃」的兜底。默认开启：CI 上若并发跑大量测试，
-// 单次崩溃不应当留下数十个无人认领的 Postgres 容器。
+// 本脚手架**默认把它关掉**，因为在本机它根本起不来：Docker Desktop 的
+// containerized 引擎不把 docker socket 暴露进容器，ryuk 一启动就
 //
-// 显式置 0 关闭它仅用于本机排查 ryuk 启动阻塞；
-// 测试代码不应依赖此开关。
+//	ERROR run error="new reaper: ping: Cannot connect to the Docker daemon
+//	at unix:///var/run/docker.sock. Is the docker daemon running?"
+//
+// 然后退出。而 ryuk 失败不是「降级成没有回收器」——它会让
+// GenericContainer 整个调用失败，测试还没开始就被跳过。实测：
+// TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock 也救不回来。
+//
+// 代价是必须清楚：关掉 ryuk 之后，**唯一**的容器回收路径是 TestMain 里的
+// Ensure。进程被 kill -9 / 超时掐掉时不会有任何兜底，会留下容器。因此
+// 每个使用 pgtest 的测试包都必须有调用 Ensure 的 TestMain——这条由
+// tools/arch 的结构测试强制，不靠人记。
+//
+// 若你的环境里 ryuk 能工作（Linux 主机、CI、或 WSL2 里 socket 挂得进去），
+// 显式覆盖成 false 即可恢复「进程崩溃也能回收」：
+//
+//	TESTCONTAINERS_RYUK_DISABLED=false go test ./...
 const EnvReaper = "TESTCONTAINERS_RYUK_DISABLED"
+
+// EnvDockerHost 与 EnvDockerSocketOverride 由 pinDockerEndpoint 在 Windows 上钉住，
+// 用来绕开 testcontainers 一次会 panic 的端点探测。原因见 pinDockerEndpoint。
+const (
+	EnvDockerHost           = "DOCKER_HOST"
+	EnvDockerSocketOverride = "TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE"
+)
+
+// Windows 上 Docker Desktop 的默认端点。钉的就是这个默认值本身，
+// 不是「换一个端点」——testcontainers 解析端点时本来就只看这个值，
+// 它压根不读 `docker context`。
+const (
+	windowsDockerHost       = "npipe:////./pipe/docker_engine"
+	windowsDockerSocketPath = "//./pipe/docker_engine"
+)
 
 var (
 	once           sync.Once
@@ -191,7 +220,13 @@ func shortHash(value string) string {
 //	    os.Exit(pgtest.Ensure(m))
 //	}
 //
-// 进程崩溃由 ryuk 兜底；正常退出由 Ensure 兜底。
+// **这不是可选项**：本机的 ryuk 起不来（见 prepare 的说明），Ensure 是唯一的
+// 回收路径。漏了这个 TestMain 的包，每跑一次就永久留下一个 Postgres 容器。
+// 该要求由 tools/arch 的结构测试强制。
+//
+// 这里刻意**不**删 postgresImage：本项目的 docker-compose 起的开发栈用的就是
+// 同一个镜像（docker-compose.yml 的 postgres 服务）。删了它会让下一次
+// `docker compose up` 重新拉取，而测试跑的频率远高于拉镜像的频率。
 func Ensure(m *testing.M) int {
 	code := m.Run()
 	if adminContainer != nil {
@@ -227,9 +262,12 @@ func prepare() {
 	}
 
 	// 必须在任何容器操作之前设置：testcontainers 在首次使用时会读取它。
+	// 注意变量语义是反的——"true" 表示**禁用** ryuk。要恢复 ryuk 请显式
+	// 置 false（见 EnvReaper 的说明）。
 	if _, ok := os.LookupEnv(EnvReaper); !ok {
 		_ = os.Setenv(EnvReaper, "true")
 	}
+	pinDockerEndpoint(runtime.GOOS)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -247,6 +285,61 @@ func prepare() {
 	}
 	adminContainer = started
 	connectAdmin()
+}
+
+// pinDockerEndpoint 在 Windows 上把 Docker 端点与 socket 路径直接钉死。
+//
+// 起因是一次**间歇性 panic**，实测约每十几次全量测试出现一次：
+//
+//	panic: rootless Docker is not supported on Windows
+//	  ...core.extractDockerSocketFromClient (docker_host.go:220)
+//
+// 这条信息与真实原因毫无关系。真实的因果链是三步：
+//
+//  1. testcontainers 判断「是不是 Docker Desktop」用的是硬编码相等
+//     （docker_host.go:210 的 info.Info.OperatingSystem == "Docker Desktop"）。
+//     本机 Docker Desktop 的 containerized 引擎自报的是
+//     "Docker Desktop (containerized)"，两者永不相等，于是这一步永不命中，
+//     解析一路退到 extractDockerHost()。
+//  2. 在 Windows 上，extractDockerHost 的六个候选里唯一可能命中的是
+//     dockerSocketPath()——它靠 os.Stat("//./pipe/docker_engine") 判断存不存在。
+//     而 Go 的 os.Stat 对命名管道会真的 CreateFile **打开**它，Docker Desktop
+//     的管道实例数有限，占满时报 "All pipe instances are busy"。
+//     实测失败率：紧凑循环 75.8%，间隔 5ms 5.7%，间隔 50ms 0.0%。
+//  3. 这个 stat 一旦失败，六个候选全失败。而 isHostNotSet 会把其中五条
+//     「未设置」类的错误滤掉，只剩最后一条 rootlessDockerSocketPath() 的错误，
+//     于是 panic 信息被写成了那句与 Windows 毫无关系的 rootless 报错。
+//
+// 它有两个触发点，缺一不可，两个都要堵：
+//
+//	docker_host.go:166  NewClient → ExtractDockerHost    失败即 panic:168
+//	                     （也是「容器起不来 → 测试被静默跳过」的根源）
+//	docker_host.go:204  cli.Info → extractDockerHost     失败即 panic:220
+//
+// DOCKER_HOST 命中 extractDockerHost 的第 2 个候选，socket override 命中 socket
+// 解析的第 2 步——两者都在那次 stat 之前，探测就够不着了。
+//
+// 实测（8 个进程持续占用 npipe 的极端负载下各跑 12 次）：
+//
+//	两个都不设          12/12 panic
+//	只设 socket override 10/12 panic（只是把 panic 从 220 推到了 168）
+//	两个都设             0/12 panic
+//
+// 只在 Windows 上设，且不覆盖调用方已经显式设好的值——Linux 上这两条都不是
+// 正确的值。socket override 在 ryuk 关掉时只影响 testcontainers 的启动横幅，
+// 不参与连接。
+// goos 由调用方传入而不是直接读 runtime.GOOS：这样「非 Windows 上什么都不做」
+// 这条分支在任何平台上都能被测到，而不是只在 Linux CI 上才有机会暴露。
+func pinDockerEndpoint(goos string) {
+	if goos != "windows" {
+		return
+	}
+	if _, ok := os.LookupEnv(EnvDockerHost); !ok {
+		_ = os.Setenv(EnvDockerHost, windowsDockerHost)
+	}
+	if _, ok := os.LookupEnv(EnvDockerSocketOverride); !ok {
+		_ = os.Setenv(EnvDockerSocketOverride, windowsDockerSocketPath)
+	}
 }
 
 func startContainer(ctx context.Context) (testcontainers.Container, error) {

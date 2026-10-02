@@ -1,4 +1,4 @@
-// Package a2ui 实现 A2UI v0.9 报文契约。
+// 本文件实现 A2UI v0.9 报文契约。
 //
 // A2UI（Agent-to-UI）是用 JSON 描述「前端应当如何渲染当前对话」的协议。
 // 我们用的是 v0.9：与 v0.8 不同的是用 createSurface / updateComponents /
@@ -10,6 +10,7 @@
 //   - createSurface 必须包含 root 组件（type="Column" / path="/requirements"）。
 //   - updateComponents 必须包含 type 字段；非法 type 一律拒渲染。
 //   - updateDataModel 必须包含 value.path 与 value.data。
+
 package runevent
 
 // A2UICatalogID 是购物场景的固定 catalogId。
@@ -34,27 +35,6 @@ const (
 //
 // 整套购物对话的数据都挂在这一棵树上：商品候选、已选清单、确认单摘要都在这。
 const ShoppingRequirementsPath = "/requirements"
-
-// A2UIComponent 是一个可渲染单元。
-//
-// Type 必须是渲染器已注册的合法类型。Surface="dynamic" 表示组件由 updateDataModel
-// 注入数据，Surface="static" 表示组件自身已包含全部数据。
-type A2UIComponent struct {
-	ID      string         `json:"id"`
-	Type    string         `json:"type"`
-	Path    string         `json:"path,omitempty"`
-	Props   map[string]any `json:"props,omitempty"`
-	Surface string         `json:"surface,omitempty"`
-}
-
-// A2UIDataEntry 是数据模型中的一项数据。
-//
-// 同一 Path 下可以挂多份数据：value.data 是数组，按顺序渲染。Value 是完整 v0.9 字段
-// 集合的兼容视图——前端按 schema.list[0].fields 必填值比对。
-type A2UIDataEntry struct {
-	Path string           `json:"path"`
-	Data []map[string]any `json:"data"`
-}
 
 // ValidateCreateSurface 校验 createSurface 报文。
 //

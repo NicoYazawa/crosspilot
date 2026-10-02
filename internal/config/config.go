@@ -44,6 +44,27 @@ type Config struct {
 	LLM      LLMConfig
 	Auth     AuthConfig
 	OTel     OTelConfig
+	Catalog  CatalogConfig
+	Pricing  PricingConfig
+}
+
+// PricingConfig 是 token 价格表的配置。
+type PricingConfig struct {
+	// PriceBookPath 覆盖内置价格表的 YAML 路径。
+	//
+	// 默认空 = 用 internal/pricing 内嵌的默认表。留这个开关是给运维的逃生口
+	// （厂商调价后不必等新版本），但默认值刻意是「空」而不是某个文件路径：
+	// 外挂路径写错时价格表会静默变成空的，全量 unpriced；内嵌表则不存在
+	// 「文件没进镜像」这种失败模式。
+	PriceBookPath string
+}
+
+// CatalogConfig 是商品目录的配置。
+type CatalogConfig struct {
+	// BootstrapPath 是商品引导文件路径，支持 catalog-v3.jsonl 明文或其 .gz。
+	// 只在 `crosspilot-catalog-import` 里用到：server 不读文件，商品数据一旦
+	// 落库就与文件无关，进程启动时不该再去碰一个 4.6 MB 的外部文件。
+	BootstrapPath string
 }
 
 // HTTPConfig 是 HTTP 服务端配置。
@@ -210,6 +231,12 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 			Endpoint:    l.str("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 			ServiceName: l.str("OTEL_SERVICE_NAME", "crosspilot-api"),
 			SampleRatio: l.float("OTEL_TRACES_SAMPLER_ARG", 1.0),
+		},
+		Catalog: CatalogConfig{
+			BootstrapPath: l.str("CATALOG_BOOTSTRAP_PATH", "data/catalog-v3.jsonl.gz"),
+		},
+		Pricing: PricingConfig{
+			PriceBookPath: l.str("PRICING_PRICEBOOK_PATH", ""),
 		},
 	}
 

@@ -2,6 +2,7 @@ package tools
 
 // Preference tool definitions (remember, update, forget)
 
+// RememberPreferenceToolDef 返回 remember_preference_tool 的 JSON Schema 声明。
 func RememberPreferenceToolDef() ToolDef {
 	return ToolDef{
 		Name:        "remember_preference_tool",
@@ -24,6 +25,7 @@ func RememberPreferenceToolDef() ToolDef {
 	}
 }
 
+// UpdatePreferenceToolDef 返回 update_preference_tool 的 JSON Schema 声明。
 func UpdatePreferenceToolDef() ToolDef {
 	return ToolDef{
 		Name:        "update_preference_tool",
@@ -60,6 +62,7 @@ func UpdatePreferenceToolDef() ToolDef {
 	}
 }
 
+// ForgetPreferenceToolDef 返回 forget_preference_tool 的 JSON Schema 声明。
 func ForgetPreferenceToolDef() ToolDef {
 	return ToolDef{
 		Name:        "forget_preference_tool",

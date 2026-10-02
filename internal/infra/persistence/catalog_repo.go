@@ -2,12 +2,12 @@ package persistence
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/NicoYazawa/crosspilot/internal/domain/catalog"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/NicoYazawa/crosspilot/internal/domain/catalog"
 )
 
 // CatalogRepo implements ports.ProductRepository using Postgres.
@@ -147,11 +147,20 @@ func scanProduct(row interface {
 	}
 	p.PrimaryPrice = money
 
-	if len(attrsJSON) > 0 {
-		if err := json.Unmarshal(attrsJSON, &p.Attributes); err != nil {
-			return catalog.Product{}, fmt.Errorf("scan: 解析属性 JSON 失败: %w", err)
-		}
+	attrs, err := catalog.AttributesFromJSON(attrsJSON)
+	if err != nil {
+		return catalog.Product{}, fmt.Errorf("scan: 商品 %s 的属性解析失败: %w", p.ID, err)
 	}
+	p.Attributes = attrs
+
+	// SKU 明细只存在 attributes.skus 里（表本身是单规格的，见 0003 迁移）。
+	// 不解析它，p.SKUs 就恒为空切片——一个「查到了商品但一个规格都没有」的
+	// 返回值，调用方拿它去初始化库存只会得到零个 SKU，且看不出哪里不对。
+	skus, err := catalog.SKUsFromAttributes(attrs, currency)
+	if err != nil {
+		return catalog.Product{}, fmt.Errorf("scan: 商品 %s 的规格解析失败: %w", p.ID, err)
+	}
+	p.SKUs = skus
 
 	return p, nil
 }

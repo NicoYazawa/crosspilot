@@ -1,4 +1,4 @@
-// SSE 处理器：POST /agui/runs 与 GET /agui/runs/{id}/events。
+// SSE 处理器：POST /commerce/ag-ui/run 与 GET /commerce/ag-ui/runs/{id}/events。
 //
 // 写入策略：「先落 journal 再写 SSE」。订阅者拉取的所有事件都来自 journal，
 // 即使进程被 kill -9 也能从上次最后序号续传（E5）。
@@ -9,9 +9,15 @@
 // E4：重连路径只调 journal.Since，handler.go 不触发任何 model 调用。
 // E5：启动时为「未关闭」的 run 注入 server_restart 哨兵事件。
 // E6：A2UI 报文落 journal 后由前端按 catalogId 校验。
+//
+// 空行把它与 package 子句隔开：本包的包注释在 journal.go，Go 只认紧贴
+// package 的那一段；不隔开会让两个文件都变成「包注释」，godoc 与 revive
+// 都会各说各话。
+
 package agui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,8 +30,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/NicoYazawa/crosspilot/internal/agent/orchestrator"
+	"github.com/NicoYazawa/crosspilot/internal/agent/protocol"
 	"github.com/NicoYazawa/crosspilot/internal/agent/runevent"
+	presauth "github.com/NicoYazawa/crosspilot/internal/presentation/auth"
 )
 
 // RunSubmitter 是「驱动一次 Agent run 并产出事件」的端口。
@@ -45,10 +52,15 @@ type RunSubmitter interface {
 }
 
 // SubmitRequest 是启动一次 run 的最小入参。
+//
+// BuyerID / SessionID 标记为 json:"-"：它们只能来自中间件解析出的身份
+// （JWT 的 sub 与 X-Session-ID），不能来自请求体。若允许请求体提供，
+// 任何持有效令牌的调用方都能把 buyer_id 写成别人，从而以他人身份下单——
+// 鉴权中间件算出来的身份会被这一行 JSON 直接推翻。
 type SubmitRequest struct {
 	RunID     string `json:"run_id,omitempty"`
-	BuyerID   string `json:"buyer_id"`
-	SessionID string `json:"session_id"`
+	BuyerID   string `json:"-"`
+	SessionID string `json:"-"`
 	Query     string `json:"query"`
 	Agent     string `json:"agent"`
 }
@@ -71,31 +83,38 @@ type RunnerConfig struct {
 	Agent     string
 }
 
+// RunCanceller 是「中断一次在跑的 run」的端口。
+//
+// 单独声明而不是并进 RunSubmitter：取消与提交是两条独立的生命周期，
+// 把它们塞进同一个接口会迫使每个测试替身都实现一个它并不关心的方法。
+type RunCanceller interface {
+	// Cancel 中断指定的 run；返回 false 表示该 run 不在跑。
+	Cancel(runID string) bool
+}
+
 // Deps 是 SSE 处理器装配依赖。
 type Deps struct {
 	Journal   JournalStore
 	Submitter RunSubmitter
 	Logger    *slog.Logger
 
-	// Clock 用于「先落库再推送」的超时控制；为 nil 时使用 time.Now。
-	Clock func() time.Time
-
-	// Heartbeat 是 SSE 心跳间隔；<= 0 时不发送。
-	Heartbeat time.Duration
+	// Canceller 是可选的运行控制端口。为 nil 时 cancel 端点返回 503——
+	// 明确告知「这个部署没有接运行控制」，而不是回一个 200 假装取消成功。
+	Canceller RunCanceller
 }
 
-// Routes 把 AG-UI 路由挂到 chi 路由器上。
+// Routes 返回 AG-UI 子路由，路径相对于挂载点。
 //
-// 期望调用方在 Routes 之外再加 RequestID / Recoverer / CORS 中间件。
-// 路径以 /agui 为前缀挂载：/agui/runs、/agui/runs/{runID}/events 等。
+// 附录 B 第 8–11 条的路由前缀 /commerce/ag-ui 由装配层用 Mount 决定；
+// 前缀不写在这里，是因为 chi 对同一个挂载路径只允许挂一次。
+//
+// 期望调用方在挂载点之外再加 RequestID / Recoverer / CORS 与鉴权中间件。
 func Routes(deps Deps) http.Handler {
 	r := chi.NewRouter()
-	r.Route("/agui", func(r chi.Router) {
-		r.Post("/runs", submitHandler(deps))
-		r.Get("/runs/{runID}", metaHandler(deps))
-		r.Get("/runs/{runID}/events", streamHandler(deps))
-		r.Post("/runs/{runID}/confirm", confirmHandler(deps))
-	})
+	r.Post("/run", submitHandler(deps))
+	r.Get("/runs/{runID}", metaHandler(deps))
+	r.Get("/runs/{runID}/events", streamHandler(deps))
+	r.Post("/runs/{runID}/cancel", cancelHandler(deps))
 	return r
 }
 
@@ -128,8 +147,25 @@ func submitHandler(deps Deps) http.HandlerFunc {
 			req.RunID = newRunID()
 		}
 
+		// 身份只认中间件算出来的那一份。
+		req.BuyerID = presauth.BuyerFrom(r.Context())
+		req.SessionID = presauth.SessionFrom(r.Context())
+		if req.BuyerID == "" {
+			writeError(w, deps.Logger, http.StatusUnauthorized, "missing_buyer",
+				errors.New("请求未携带买家身份"))
+			return
+		}
+
 		events, err := deps.Submitter.Submit(r.Context(), req)
 		if err != nil {
+			// 分类依据是「调用方重试同一个请求会怎样」，而不是错误出在哪一层：
+			// 没接模型是部署状态（重试无用，该去开配置），回 503 让调用方一眼看懂；
+			// 其余 submit 失败保持 500，避免把真正的服务端故障伪装成「稍后重试」。
+			// 这与 commerce.writeServiceError 的分类口径一致。
+			if errors.Is(err, protocol.ErrModelUnavailable) {
+				writeError(w, deps.Logger, http.StatusServiceUnavailable, "model_unavailable", err)
+				return
+			}
 			writeError(w, deps.Logger, http.StatusInternalServerError, "submit_failed", err)
 			return
 		}
@@ -153,7 +189,7 @@ func submitHandler(deps Deps) http.HandlerFunc {
 //   - 每次写完一批立即 Flush（用 http.Flusher）
 //   - id: {event_id} 行 → 客户端据此续传
 //   - event: <kind> 行 → 客户端据此分桶
-//   - data: <json> 行 → 业务数据
+//   - data: <json> 行 → 完整的 runevent.Event（含 seq；客户端靠它做缺口检测）
 func streamHandler(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
@@ -173,7 +209,7 @@ func streamHandler(deps Deps) http.HandlerFunc {
 		if raw == "" {
 			raw = strings.TrimSpace(r.URL.Query().Get("cursor"))
 		}
-		var since int64 = 0
+		var since int64
 		if raw != "" {
 			c, err := ParseCursor(raw)
 			if err != nil {
@@ -209,16 +245,23 @@ func streamHandler(deps Deps) http.HandlerFunc {
 			return
 		}
 		for _, ev := range histEvents {
-			writeSSE(w, flusher, ev)
+			if err := writeSSE(w, flusher, ev); err != nil {
+				// 订阅端已断开：后面的事件没有读者，继续写只是空转；而且响应
+				// 已经写坏了，重试也补不回来。记一条日志收工。
+				if deps.Logger != nil {
+					deps.Logger.WarnContext(r.Context(), "agui: SSE 写出失败，中止回放",
+						slog.String("run_id", runID),
+						slog.Any("error", err))
+				}
+				return
+			}
 		}
 		flusher.Flush()
 
 		// 5. 实时尾巴：当且仅当 Publisher 接入时才挂起等待。
 		//
-		// 当前没有 publisher（E9 在 P5 阶段补），直接返回——回放完成即结束。
-		// 测试不会因此卡住；生产环境接入 publisher 后，本函数改为阻塞 select。
-		_ = last // 用于 CheckGap；为避免 unused 警告保留赋值。
-		return
+		// 当前没有 publisher（E9 在 P5 阶段补），回放完成即结束。
+		// 生产环境接入 publisher 后，本函数在这里改为阻塞 select。
 	}
 }
 
@@ -242,82 +285,33 @@ func metaHandler(deps Deps) http.HandlerFunc {
 	}
 }
 
-// confirmHandler 处理 POST /agui/runs/{runID}/confirm。
+// cancelHandler 处理 POST /commerce/ag-ui/runs/{runID}/cancel。
 //
-// 占位实现：把用户决议写入 journal（作为 confirm_decided 事件），
-// 不实际触发订单状态变更——P1 trade 服务的 Resolve 调用由 P7 接入。
+// 它调用 Canceller 中断底层推理，而不是往 journal 里写一条「已取消」事件了事。
+// 只改状态位的取消会让模型继续跑到结束——调用方以为省下了 token，账单上
+// 一个都没少。
 //
-// 本端点用来把 AG-UI 协议层先跑通，避免 P6 前端没有可以 POST 的地方。
-func confirmHandler(deps Deps) http.HandlerFunc {
+// 决议（买家批准/拒绝某张确认单）不在这里：那是 /commerce/confirmations/
+// {id}/resolve 的职责，走交易账本，与「停掉一次推理」是两件事。
+func cancelHandler(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		runID := chi.URLParam(r, "runID")
-		var req struct {
-			ConfirmationID string `json:"confirmation_id"`
-			Approved       bool   `json:"approved"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, deps.Logger, http.StatusBadRequest, "invalid_body", err)
+		if runID == "" {
+			writeError(w, deps.Logger, http.StatusBadRequest, "missing_run_id", errors.New("run_id 缺失"))
 			return
 		}
-		if req.ConfirmationID == "" {
-			writeError(w, deps.Logger, http.StatusBadRequest, "missing_confirmation_id", errors.New("confirmation_id 必填"))
+		if deps.Canceller == nil {
+			writeError(w, deps.Logger, http.StatusServiceUnavailable, "cancel_unsupported",
+				errors.New("本部署未接入运行控制"))
 			return
 		}
-
-		// 取最后序号续号：journal 写入单调性由 Append 保证。
-		last, err := deps.Journal.LastSeq(r.Context(), runID)
-		if err != nil {
-			writeError(w, deps.Logger, http.StatusNotFound, "run_not_found", err)
+		if !deps.Canceller.Cancel(runID) {
+			writeError(w, deps.Logger, http.StatusNotFound, "run_not_active",
+				errors.New("该 run 不在运行中"))
 			return
 		}
-
-		now := nowOr(deps.Clock)
-		seq := last + 1
-		payload, _ := json.Marshal(map[string]any{
-			"confirmation_id": req.ConfirmationID,
-			"approved":        req.Approved,
-		})
-		seqr := runevent.NewSequencer(runID)
-		// 把 sequencer 调到 last+1——手动驱动 Next。
-		// (生产中 Submitter 会持有 sequencer，但 confirm 不走 Submitter。)
-		for i := int64(0); i < seq; i++ {
-			seqr.Next()
-		}
-		ev, err := seqr.Attach(seq, runevent.Kind("confirm_decided"), "user", payload, now)
-		if err != nil {
-			writeError(w, deps.Logger, http.StatusInternalServerError, "event_build_failed", err)
-			return
-		}
-		if _, err := deps.Journal.Append(r.Context(), ev); err != nil {
-			writeError(w, deps.Logger, http.StatusInternalServerError, "journal_error", err)
-			return
-		}
-
-		writeJSON(w, http.StatusOK, map[string]any{
-			"run_id": runID,
-			"event":  ev,
-		}, deps.Logger)
+		writeJSON(w, http.StatusOK, map[string]any{"run_id": runID, "cancelled": true}, deps.Logger)
 	}
-}
-
-// MapOrchestratorEvent 把 orchestrator 的 Event 转成 RunEvent（应用层使用）。
-//
-// 这一层转换放在应用层 (orderflow) 而非本包：本包只定义接口，
-// 真实实现位于 application 包——避免 presentation 直接依赖 orchestrator 类型。
-//
-// 此处仅作占位：handler 不直接调用，orderflow service 才调用。
-func MapOrchestratorEvent(seqr *runevent.Sequencer, ev orchestrator.Event) (runevent.Event, error) {
-	kind := runevent.Kind(ev.Kind)
-	payload, err := json.Marshal(map[string]any{
-		"agent":     ev.Agent,
-		"content":   ev.Content,
-		"tool_name": ev.ToolName,
-		"iteration": ev.Iteration,
-	})
-	if err != nil {
-		return runevent.Event{}, err
-	}
-	return seqr.Attach(seqr.Next(), kind, ev.Agent, payload, nowOr(nil))
 }
 
 // --- internal helpers ----------------------------------------------------
@@ -330,15 +324,47 @@ func setSSEHeaders(w http.ResponseWriter) {
 	h.Set("X-Accel-Buffering", "no")
 }
 
-func writeSSE(w io.Writer, flusher http.Flusher, ev runevent.Event) {
-	fmt.Fprintf(w, "id: %s\n", ev.EventID)
-	fmt.Fprintf(w, "event: %s\n", ev.Kind)
-	if len(ev.Payload) > 0 {
-		fmt.Fprintf(w, "data: %s\n\n", string(ev.Payload))
-	} else {
-		fmt.Fprintf(w, "data: {}\n\n")
+// writeSSE 写出一条完整的 SSE 帧。
+//
+// 先在内存里拼好再一次性 Write：一帧由 id/event/data 三行加空行组成，分几次
+// 写意味着客户端可能读到「有 id 没 data」的半截帧；一次写至少保证帧内不撕裂。
+//
+// data 行放的是**整个 runevent.Event**，不是它的 payload。
+//
+// 曾经这里只写 ev.Payload，理由是「kind 已经在 event 行、event_id 已经在 id 行，
+// data 里再放一遍是冗余」。这个理由漏掉了 seq：客户端做缺口检测（附录 C 第 4 条
+// 「id: {runId}:{seq}，必须连续」）需要每条事件的序号，而 event_id 是
+// `{runId}:{seq}:{nanos}` 这种内部形态，不该让客户端去拆。于是前端按它自己的契约
+// （types.ts 声明「Event JSON tag 与 runevent.go 对齐」）读 data.seq，读到 undefined，
+// 把**每一条事件**都当成畸形帧丢掉——真链路上页面一条消息、一张卡片都渲染不出来。
+//
+// 两端各自的测试都用自己的格式，谁都没发现：后端这套用例只解析 id 行，从不看 data
+// 里有什么；前端用例喂的是拼好的完整事件。这个缝现在由 handler_test 的
+// TestSSEDataCarriesWholeEvent 钉住。
+//
+// 返回错误而不是吞掉：写失败说明订阅端已经走了，或者 journal 里存了无法序列化的
+// 载荷。调用方据此停止回放——继续为不存在的读者生成事件，只会让一个已经断掉的
+// 连接继续占着推理和网络。
+func writeSSE(w io.Writer, flusher http.Flusher, ev runevent.Event) error {
+	body, err := json.Marshal(ev)
+	if err != nil {
+		return fmt.Errorf("agui: 序列化事件 %s 失败：%w", ev.EventID, err)
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString("id: ")
+	buf.WriteString(ev.EventID)
+	buf.WriteString("\nevent: ")
+	buf.WriteString(string(ev.Kind))
+	buf.WriteString("\ndata: ")
+	buf.Write(body)
+	buf.WriteString("\n\n")
+
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		return err
 	}
 	flusher.Flush()
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any, logger *slog.Logger) {
@@ -364,41 +390,6 @@ func writeError(w http.ResponseWriter, logger *slog.Logger, status int, code str
 		)
 	}
 	writeJSON(w, status, map[string]string{"error": code}, logger)
-}
-
-func nowOr(clock func() time.Time) time.Time {
-	if clock != nil {
-		return clock()
-	}
-	return time.Now().UTC()
-}
-
-// keepAlive 周期性发送心跳直到 ctx 取消或客户端断开。
-//
-// 心跳内容是注释行（`:` 开头），客户端 EventSource 会忽略、但能阻止代理超时。
-// 当前 streamHandler 不调用本函数（P5 接入 publisher 时再挂上），
-// 但保留实现，避免 P5 阶段再写一次。
-func keepAlive(w http.ResponseWriter, flusher http.Flusher, interval time.Duration, logger *slog.Logger, ctx context.Context) {
-	if interval <= 0 {
-		<-ctx.Done()
-		return
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
-				if logger != nil {
-					logger.Debug("agui: 心跳写入失败", slog.Any("error", err))
-				}
-				return
-			}
-			flusher.Flush()
-		}
-	}
 }
 
 // newRunID 生成一个 run 标识。

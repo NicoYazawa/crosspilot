@@ -1,10 +1,14 @@
+// Package embedding 提供文本向量化的 HTTP 客户端与 Redis 缓存。
+//
+// 缓存以文本哈希为键（见下方各方法），不缓存原始向量请求体——因为缓存键
+// 要能被任意调用方复现，而请求体里含模型名等会让人误以为「换模型仍命中」。
 package embedding
 
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -22,22 +26,11 @@ func NewCache(client *redis.Client, ttl time.Duration) *Cache {
 	return &Cache{client: client, ttl: ttl}
 }
 
-// embeddingCacheKey returns the cache key for an embedding request.
-func embeddingCacheKey(embedding []float32) string {
-	h := sha256.Sum256(asBytes(embedding))
-	return "emb:" + hex.EncodeToString(h[:8])
-}
-
-func asBytes(v []float32) []byte {
-	b, _ := json.Marshal(v)
-	return b
-}
-
 // GetEmbedding returns a cached embedding vector for the given cache key prefix + text.
 func (c *Cache) GetEmbedding(ctx context.Context, text string) ([]float32, bool, error) {
 	key := "semantic:" + fmt.Sprintf("%x", sha256.Sum256([]byte(text)))
 	val, err := c.client.Get(ctx, key).Bytes()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return nil, false, nil
 	}
 	if err != nil {
@@ -64,7 +57,7 @@ func (c *Cache) SetEmbedding(ctx context.Context, text string, vec []float32) er
 func (c *Cache) GetEmbeddingByHash(ctx context.Context, hash string) ([]float32, bool, error) {
 	key := "emb:" + hash
 	val, err := c.client.Get(ctx, key).Bytes()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return nil, false, nil
 	}
 	if err != nil {

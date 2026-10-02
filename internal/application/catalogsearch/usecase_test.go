@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/NicoYazawa/crosspilot/internal/domain/catalog"
 	"github.com/NicoYazawa/crosspilot/internal/domain/catalog/ports"
 	"github.com/NicoYazawa/crosspilot/internal/domain/shipping"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // --- Mock implementations ------------------------------------------------------
@@ -21,7 +22,7 @@ type mockProductRepo struct {
 	err     error
 }
 
-func (m *mockProductRepo) FindByIDs(ctx context.Context, ids []string) ([]catalog.Product, error) {
+func (m *mockProductRepo) FindByIDs(_ context.Context, ids []string) ([]catalog.Product, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -32,7 +33,7 @@ func (m *mockProductRepo) FindByIDs(ctx context.Context, ids []string) ([]catalo
 	return result, nil
 }
 
-func (m *mockProductRepo) ListAll(ctx context.Context) ([]catalog.Product, error) {
+func (m *mockProductRepo) ListAll(_ context.Context) ([]catalog.Product, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -44,7 +45,7 @@ type mockEmbedder struct {
 	err       error
 }
 
-func (m *mockEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+func (m *mockEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -56,7 +57,7 @@ type mockVectorIndex struct {
 	err  error
 }
 
-func (m *mockVectorIndex) Search(ctx context.Context, embedding []float32, topN int) ([]ports.VectorHit, error) {
+func (m *mockVectorIndex) Search(_ context.Context, _ []float32, _ int) ([]ports.VectorHit, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -68,7 +69,7 @@ type mockReranker struct {
 	err    error
 }
 
-func (m *mockReranker) Rerank(ctx context.Context, query string, products []catalog.Product) ([]float32, error) {
+func (m *mockReranker) Rerank(_ context.Context, _ string, _ []catalog.Product) ([]float32, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -133,7 +134,7 @@ func testProduct(id, title, category string, price catalog.Money, skus []catalog
 		SourceLanguage: "zh",
 		SourceLocale:   "zh-CN",
 		DataProvenance: "test",
-		Attributes:     map[string]string{"color": "black"},
+		Attributes:     map[string]any{"color": "black"},
 	}
 }
 
@@ -266,8 +267,79 @@ func TestExecuteKeywordRecall(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "keyword_2gram", result.RecallStrategy)
-	assert.Len(t, result.Hits, 1)
+	// require 而不是 assert：下一行要索引 Hits[0]，用 assert 会在命中为空时
+	// 以 index out of range **panic**，整个包的后续用例一条都不会跑——
+	// 一次召回失败会伪装成「全部通过」。
+	require.Len(t, result.Hits, 1)
 	assert.Equal(t, "P1001", result.Hits[0].ProductID)
+}
+
+// TestExecuteKeywordRecall_CJK二元组重叠 钉住买家真实输入的那条路径。
+//
+// 上面那条用例查的是「登山」，它是「防水登山包」的**子串**——最宽松的一种匹配。
+// 而买家实际输入的是「登山包」，库里叫「登山背包」：两者谁都不是谁的子串，
+// 唯一的重叠是相邻二元组切出来的「登山」。
+//
+// 这条召回一旦断掉，症状是「搜什么都是空的」，而不会在任何地方报错——
+// 所以必须有一条用例把「二元组重叠也能命中」这件事本身钉住。
+func TestExecuteKeywordRecall_CJK二元组重叠(t *testing.T) {
+	products := []catalog.Product{
+		testProduct("P2001", "Roamix 户外登山背包 30L", "户外装备",
+			mustMoney("299.00", catalog.USD),
+			[]catalog.SKU{testSKU("P2001-S1", "30L", mustMoney("299.00", catalog.USD), 10)}),
+		testProduct("P2002", "城市通勤双肩包", "箱包",
+			mustMoney("199.00", catalog.USD),
+			[]catalog.SKU{testSKU("P2002-S1", "20L", mustMoney("199.00", catalog.USD), 8)}),
+		testProduct("P2003", "折叠登山杖", "户外装备",
+			mustMoney("89.00", catalog.USD),
+			[]catalog.SKU{testSKU("P2003-S1", "单支", mustMoney("89.00", catalog.USD), 20)}),
+	}
+	repo := &mockProductRepo{listAll: products}
+	ts := shipping.NewTariffSchedule(nil)
+	uc := New(repo, nil, nil, nil, ts)
+
+	result, err := uc.Execute(context.Background(), catalog.ProductSearchSpec{
+		NormalizedQuery: "登山包",
+		TopK:            10,
+		TargetCurrency:  catalog.USD,
+	})
+	require.NoError(t, err)
+
+	got := map[string]bool{}
+	for _, h := range result.Hits {
+		got[h.ProductID] = true
+	}
+	if !got["P2001"] {
+		t.Errorf("「登山包」没召回「登山背包」：%v", result.Hits)
+	}
+	if got["P2002"] {
+		t.Errorf("「登山包」不该召回毫无字面重叠的「城市通勤双肩包」")
+	}
+}
+
+// TestExecuteKeywordRecall_无重叠则不召回 是上一条的反面。
+//
+// 若 keywordScore 被判成「有词就中」，或者 tokenize 退化成「返回整串」，
+// 上一条仍会通过；只有这条能挡住——它要求「搜不到」就是搜不到。
+func TestExecuteKeywordRecall_无重叠则不召回(t *testing.T) {
+	products := []catalog.Product{
+		testProduct("P2001", "Roamix 户外登山背包 30L", "户外装备",
+			mustMoney("299.00", catalog.USD),
+			[]catalog.SKU{testSKU("P2001-S1", "30L", mustMoney("299.00", catalog.USD), 10)}),
+	}
+	repo := &mockProductRepo{listAll: products}
+	ts := shipping.NewTariffSchedule(nil)
+	uc := New(repo, nil, nil, nil, ts)
+
+	result, err := uc.Execute(context.Background(), catalog.ProductSearchSpec{
+		NormalizedQuery: "无人机航拍器",
+		TopK:            10,
+		TargetCurrency:  catalog.USD,
+	})
+	require.NoError(t, err)
+	if len(result.Hits) != 0 {
+		t.Errorf("无字面重叠却召回了 %d 条：%v", len(result.Hits), result.Hits)
+	}
 }
 
 // --- Embedding search ----------------------------------------------------------
@@ -1025,12 +1097,4 @@ func TestExecuteProductWithNoSKUs(t *testing.T) {
 	require.Len(t, result.Hits, 0)
 	require.Len(t, result.FilteredOut, 1)
 	assert.Equal(t, "out_of_stock", result.FilteredOut[0].Reason)
-}
-
-// --- assertTrue helper --------------------------------------------------------
-
-func assertTrue(t *testing.T, b bool) {
-	if !b {
-		t.Error("expected true")
-	}
 }

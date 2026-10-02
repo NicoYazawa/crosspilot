@@ -1,7 +1,7 @@
+// Package tools 声明 Agent 可调用的工具：JSON Schema 定义，加执行器与结果校验。
 package tools
 
-// TaskDispatchToolDef and ShoppingFormToolDef
-
+// TaskDispatchToolDef 返回 task_dispatch_tool 的 JSON Schema 声明。
 func TaskDispatchToolDef() ToolDef {
 	return ToolDef{
 		Name:        "task_dispatch_tool",
@@ -24,6 +24,7 @@ func TaskDispatchToolDef() ToolDef {
 	}
 }
 
+// ShoppingFormToolDef 返回 shopping_form_tool 的 JSON Schema 声明。
 func ShoppingFormToolDef() ToolDef {
 	return ToolDef{
 		Name:        "shopping_form_tool",

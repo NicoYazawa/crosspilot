@@ -42,7 +42,13 @@ type Product struct {
 	SourceLanguage string
 	SourceLocale   string
 	DataProvenance string
-	Attributes     map[string]string // 其他属性键值对
+	// Attributes 是 catalog.products.attributes 那一列的内容，对应 JSONB。
+	//
+	// 取值是 any 而不是 string：这一列里存的不只是字符串，规格明细
+	// （skus）、卖点（highlights）、尺寸（dimensions_cm）都是嵌套对象与数组。
+	// 定成 map[string]string 会**解不出任何一行真实数据**——JSONB 里只要有
+	// 一个非字符串的值，Unmarshal 整体报错，「查得到商品」这件事就成了假的。
+	Attributes map[string]any
 }
 
 // Validate 报告商品是否满足领域约束。
@@ -53,7 +59,7 @@ func (p Product) Validate() error {
 	if p.Title == "" {
 		return fmt.Errorf("%w: 商品 %s 标题为空", ErrInvalidProduct, p.ID)
 	}
-	if !p.PrimaryPrice.Currency.Valid() && !p.Price().Currency.Valid() {
+	if !p.PrimaryPrice.Currency.Valid() || !p.Price().Currency.Valid() {
 		// 如果有 SKU 价格也行
 		hasPrice := false
 		for _, sku := range p.SKUs {

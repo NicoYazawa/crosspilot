@@ -10,10 +10,12 @@ package arch
 
 import (
 	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -449,4 +451,141 @@ func mustComponent(t *testing.T, name string) component {
 	}
 	t.Fatalf("组件 %s 未定义", name)
 	return component{}
+}
+
+// --- 测试脚手架的回收规则 ---
+
+// pgtestImportPath 是「用了就必须回收」的测试脚手架包。
+const pgtestImportPath = modulePrefix + "internal/infra/persistence/pg/pgtest"
+
+// TestPgtestUsersDefineTestMain 守住「用了 pgtest 就必须回收容器」。
+//
+// pgtest.NewDatabase 每跑一次会起一个 Postgres 容器。本机上 testcontainers 的
+// ryuk 兜底是不可用的——Docker Desktop 不把 docker socket 暴露进容器，ryuk
+// 一启动就报 "Cannot connect to the Docker daemon" 然后退出，而它失败会让整个
+// 容器启动失败。脚手架的应对是默认关掉 ryuk（见 pgtest.EnvReaper）。
+//
+// 关掉之后的代价必须被守住：**TestMain 里的 pgtest.Ensure 是唯一的回收路径**。
+// 漏掉它的包每跑一次就永久留下一个 Postgres 容器，而现象是没有现象——
+// `go test` 依然全绿，只有 `docker ps` 会慢慢变长。本仓库曾因此在开发机上
+// 攒下十几个无人认领的容器。
+//
+// 用测试守而不是靠人记：新加一个用 pgtest 的包时，忘了 TestMain 会在 CI 上
+// 直接红，而不是几周后在别人的 Docker 里显形。
+func TestPgtestUsersDefineTestMain(t *testing.T) {
+	root := repoRoot(t)
+
+	users := map[string]bool{}     // 目录 → 有测试文件导入 pgtest
+	recyclers := map[string]bool{} // 目录 → 有 TestMain 调用 pgtest.Ensure
+
+	fileSet := token.NewFileSet()
+	err := filepath.WalkDir(root, func(p string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if skipDir(entry.Name()) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(entry.Name(), "_test.go") {
+			return nil
+		}
+
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		dir := path.Dir(filepath.ToSlash(rel))
+
+		file, err := parser.ParseFile(fileSet, p, nil, 0)
+		if err != nil {
+			return fmt.Errorf("解析 %s 失败: %w", rel, err)
+		}
+
+		local := importLocalName(file, pgtestImportPath)
+		if local == "" {
+			return nil
+		}
+		users[dir] = true
+		if callsEnsure(file, local) {
+			recyclers[dir] = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("扫描失败: %v", err)
+	}
+
+	// 防止规则因改名或移动而静默失效：一个使用者都扫不到时，这条检查等于没写，
+	// 却依然会「通过」。
+	if len(users) == 0 {
+		t.Fatalf("没有任何测试包导入 %s；若它已改名或移除，请同步更新本规则",
+			pgtestImportPath)
+	}
+
+	for _, dir := range sortedKeys(users) {
+		if recyclers[dir] {
+			continue
+		}
+		t.Errorf("%s 的测试用了 pgtest，却没有调用 pgtest.Ensure 的 TestMain\n"+
+			"    后果：每跑一次测试，该包都会留下一个不再回收的 Postgres 容器。\n"+
+			"    修法：在该目录加 main_test.go\n"+
+			"        func TestMain(m *testing.M) { os.Exit(pgtest.Ensure(m)) }", dir)
+	}
+}
+
+// importLocalName 返回文件导入 target 时使用的局部名；未导入则返回空串。
+func importLocalName(file *ast.File, target string) string {
+	for _, spec := range file.Imports {
+		pkg, err := strconv.Unquote(spec.Path.Value)
+		if err != nil || pkg != target {
+			continue
+		}
+		if spec.Name != nil {
+			return spec.Name.Name
+		}
+		return path.Base(target)
+	}
+	return ""
+}
+
+// callsEnsure 判断文件里是否定义了调用 <local>.Ensure 的 TestMain。
+func callsEnsure(file *ast.File, local string) bool {
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "TestMain" || fn.Recv != nil || fn.Body == nil {
+			continue
+		}
+		found := false
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == local && sel.Sel.Name == "Ensure" {
+				found = true
+			}
+			return true
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+// sortedKeys 返回 map 的键并排序，让失败信息稳定可复现。
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

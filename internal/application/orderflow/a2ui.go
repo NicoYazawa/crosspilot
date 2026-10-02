@@ -8,6 +8,7 @@
 //
 // 三报文严格按顺序写出，且每条都走 runevent.ValidateXxx 校验——
 // 校验失败的报文绝不发出，宁可不渲染也不传坏数据给前端。
+
 package orderflow
 
 import (
@@ -16,6 +17,43 @@ import (
 
 	"github.com/NicoYazawa/crosspilot/internal/agent/runevent"
 )
+
+// a2uiRootID 是根容器组件 id。两份 emitter 共用同一个根，前端因此只认一个
+// surface 根。
+const a2uiRootID = "root"
+
+// a2uiRoot 构造 createSurface 里的根 Column。
+//
+// children 必须显式列出子组件的 id——前端的 Renderer 只对 type=Column 的组件
+// 解析 children，且只认「组件 id 的数组」。漏了它，根节点会渲染成
+// 「(空 Column)」：卡片数据都在、报文校验也过，就是一张都不显示。
+//
+// 子组件可以晚于 createSurface 出现（updateComponents 才带过来）：渲染时是
+// 按整条消息序列重建组件表的，先注册的根后拿到子组件没有问题。
+func a2uiRoot(title string, children []any, extra map[string]any) map[string]any {
+	props := map[string]any{
+		"title":    title,
+		"children": children,
+	}
+	for k, v := range extra {
+		props[k] = v
+	}
+	return map[string]any{
+		"id":    a2uiRootID,
+		"type":  "Column",
+		"path":  runevent.ShoppingRequirementsPath,
+		"props": props,
+	}
+}
+
+// cardIDs 生成 `<prefix>-<i>` 形式的组件 id 列表。
+func cardIDs(prefix string, n int) []any {
+	out := make([]any, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, fmt.Sprintf("%s-%d", prefix, i))
+	}
+	return out
+}
 
 // ConfirmationLike 是 A2UIEmitter 关心的 confirmation 形状。
 //
@@ -34,6 +72,7 @@ type ConfirmationLike struct {
 	Items          []ConfirmationItem
 }
 
+// ConfirmationItem 是 A2UI 卡片所需的最小商品字段，待 P7 接 trade 后替换为完整类型。
 type ConfirmationItem struct {
 	ProductID  string
 	SKUID      string
@@ -58,23 +97,12 @@ func (e *A2UIEmitter) Emit(c ConfirmationLike) ([]map[string]any, error) {
 		"catalogId": runevent.A2UICatalogID,
 		"version":   runevent.A2UIVersion,
 		"components": []any{
-			map[string]any{
-				"id":   "root",
-				"type": "Column",
-				"path": runevent.ShoppingRequirementsPath,
-				"props": map[string]any{
-					"title":           "购物清单",
+			a2uiRoot("购物清单",
+				append(cardIDs("card", len(c.Items)), "subtotal-line"),
+				map[string]any{
 					"confirmation_id": c.ConfirmationID,
 					"expires_at":      c.ExpiresAt,
-				},
-			},
-			map[string]any{
-				"id":   "items-list",
-				"type": "List",
-				"props": map[string]any{
-					"placeholder": "已选商品会出现在这里",
-				},
-			},
+				}),
 			map[string]any{
 				"id":   "subtotal-line",
 				"type": "SubtotalLine",

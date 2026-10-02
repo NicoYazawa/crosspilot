@@ -34,9 +34,15 @@ type Check struct {
 }
 
 // healthResponse 是健康检查的响应体。
+//
+// 带版本与提交号：编排系统只关心 status，但排查线上问题时第一个要问的是
+// 「这个实例跑的是哪一版」。把它挂在健康端点上是唯一不需要额外通道、
+// 也不需要数据库就能拿到的事实。
 type healthResponse struct {
-	Status string            `json:"status"`
-	Checks map[string]string `json:"checks"`
+	Status  string            `json:"status"`
+	Version string            `json:"version"`
+	Commit  string            `json:"commit"`
+	Checks  map[string]string `json:"checks"`
 }
 
 // HealthHandler 汇总所有探测项，全部正常返回 200，任何一项失败返回 503。
@@ -47,6 +53,11 @@ type healthResponse struct {
 // 各项并发执行，整体耗时取决于最慢的一项而不是它们的总和；再叠加 probeBudget
 // 兜底，无论依赖如何表现，响应时间都有上限。
 func HealthHandler(logger *slog.Logger, checks ...Check) http.HandlerFunc {
+	build := ReadBuildInfo()
+	return healthHandler(logger, build, checks...)
+}
+
+func healthHandler(logger *slog.Logger, build BuildInfo, checks ...Check) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), probeBudget)
 		defer cancel()
@@ -83,7 +94,12 @@ func HealthHandler(logger *slog.Logger, checks ...Check) http.HandlerFunc {
 			}
 		}
 
-		writeJSON(w, status, healthResponse{Status: overall, Checks: states}, logger)
+		writeJSON(w, status, healthResponse{
+			Status:  overall,
+			Version: build.Version,
+			Commit:  build.Commit,
+			Checks:  states,
+		}, logger)
 	}
 }
 
@@ -107,7 +123,13 @@ func runProbe(ctx context.Context, check Check) error {
 //
 // 与就绪探测分开：依赖不可用时应当停止接流量，但不应当被反复重启。
 func LiveHandler(logger *slog.Logger) http.HandlerFunc {
+	build := ReadBuildInfo()
 	return func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, healthResponse{Status: statusOK, Checks: map[string]string{}}, logger)
+		writeJSON(w, http.StatusOK, healthResponse{
+			Status:  statusOK,
+			Version: build.Version,
+			Commit:  build.Commit,
+			Checks:  map[string]string{},
+		}, logger)
 	}
 }

@@ -1,0 +1,60 @@
+# CrossPilot 默认 token 价格表（内置，随二进制一起发布）
+#
+# ⚠️ 待人工核对
+#    本表依各家公开价目页整理，**未经人工逐行复核**。复核方式很省事：
+#    unit_minor 的数字**逐个等于**厂商价目页上的「元 / 百万 tokens」——
+#    推导见 internal/pricing/pricing.go 的包注释「货币单位」，不需要任何心算换算。
+#    核对完请把本行改成「已核对 YYYY-MM-DD <核对人>」。
+#
+# 取价口径（每条都取偏保守的一侧，宁可高估、不可低报）：
+#   1. 实时推理价；**不含** batch / 批量折扣 / 限时促销价
+#   2. 按上下文长度分档的，取**最小档**
+#   3. 分时段计价的（DeepSeek 高峰 / 低谷），取**高峰价**
+#
+# 条目缺失的后果 = 该 model 全部维度 unpriced（显式标记，绝不按 0 计），
+# 会在成本看板的 unpriced_count 里显形，并在服务启动时打一条 WARN。
+version: "2026-10-02"
+source:
+  deepseek: "https://api-docs.deepseek.com/zh-cn/quick_start/pricing"
+  qwen: "https://help.aliyun.com/zh/model-studio/models"
+  minimax: "https://platform.minimaxi.com/document/price"
+  anthropic: "https://www.anthropic.com/pricing"
+effective_date: "2026-10-02"
+
+entries:
+  # ---- DeepSeek -----------------------------------------------------------
+  # 高峰价。低谷时段（北京时间 00:30–08:30）为 input 1 / cached_input 0.02 /
+  # output 4，本表**不采用**——低谷价只在部分时段成立，用它会给出一份「有时
+  # 对得上、有时对不上」的成本，比稳定高估更难排查。
+  #
+  # 注意：内置表的 model 名必须与配置里的 DEEPSEEK_MODEL 逐字一致。装配默认值
+  # 是 deepseek-chat，而本表只有 deepseek-flash；用默认值启动会得到全表 unpriced
+  # （可见，非静默），启动日志会 WARN 指出是哪个 (provider, model) 没覆盖。
+  - {provider: deepseek, model: deepseek-flash, kind: input,        unit_minor: "2",    currency: CNY}
+  - {provider: deepseek, model: deepseek-flash, kind: output,       unit_minor: "8",    currency: CNY}
+  - {provider: deepseek, model: deepseek-flash, kind: cached_input, unit_minor: "0.04", currency: CNY}
+
+  # ---- 阿里云百炼 / Qwen ---------------------------------------------------
+  # qwen3-max 按上下文长度分三档：0–32K 为 2.5/10、32K–128K 为 4/16、
+  # 128K–252K 为 7/28。本表取**最小档**，即长上下文请求会被低报（Caveat）。
+  # 缓存命中价为输入价的 10%；batch 调用的五折未采用。
+  - {provider: qwen, model: qwen3-max, kind: input,        unit_minor: "2.5",  currency: CNY}
+  - {provider: qwen, model: qwen3-max, kind: output,       unit_minor: "10",   currency: CNY}
+  - {provider: qwen, model: qwen3-max, kind: cached_input, unit_minor: "0.25", currency: CNY}
+
+  # ---- MiniMax ------------------------------------------------------------
+  - {provider: minimax, model: MiniMax-M2, kind: input,        unit_minor: "2.1",  currency: CNY}
+  - {provider: minimax, model: MiniMax-M2, kind: output,       unit_minor: "8.4",  currency: CNY}
+  - {provider: minimax, model: MiniMax-M2, kind: cached_input, unit_minor: "0.21", currency: CNY}
+
+  # ---- Anthropic ----------------------------------------------------------
+  # 唯一以美元计价的条目——厂商按美元报价，改写成人民币会引入一个随汇率漂移
+  # 的假精度。observability.cost.currency 逐行记录币种，读取端按币种聚合。
+  #
+  # Caveat：Anthropic Messages 的 usage 里 input_tokens **不含** cache_creation
+  # 与 cache_read 两部分，而本表没有「缓存写入」这一维（金标准四维是 F10 定的）。
+  # 于是带 prompt caching 写入的调用会被低报。另外 Anthropic 适配器（Messages
+  # 协议族）尚未接入，本条目前只在价格表层面为将来留位。
+  - {provider: anthropic, model: claude-sonnet-5-5, kind: input,        unit_minor: "2",   currency: USD}
+  - {provider: anthropic, model: claude-sonnet-5-5, kind: output,       unit_minor: "10",  currency: USD}
+  - {provider: anthropic, model: claude-sonnet-5-5, kind: cached_input, unit_minor: "0.2", currency: USD}

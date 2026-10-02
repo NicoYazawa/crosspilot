@@ -15,16 +15,6 @@ import (
 	"github.com/NicoYazawa/crosspilot/internal/agent/breaker"
 )
 
-// ActionKind 描述一次动作的类型，供中间件做差异化策略。
-type ActionKind int
-
-const (
-	// KindLLM 是模型调用。
-	KindLLM ActionKind = iota
-	// KindTool 是工具调用。
-	KindTool
-)
-
 // Assertion 是一次调用前的断言。返回 error 表示业务前置条件不满足。
 //
 // 与 Resilience 重试不同，断言失败**不**应触发重试——它代表的是请求

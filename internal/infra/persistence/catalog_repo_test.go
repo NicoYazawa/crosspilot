@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/NicoYazawa/crosspilot/internal/domain/catalog"
 	"github.com/NicoYazawa/crosspilot/internal/infra/persistence/pg/pgtest"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestCatalogRepo_FindByIDs(t *testing.T) {
@@ -16,7 +17,7 @@ func TestCatalogRepo_FindByIDs(t *testing.T) {
 	ctx := context.Background()
 	repo := NewCatalogRepo(pool)
 
-	insertProducts(t, ctx, pool, []catalog.Product{
+	insertProducts(ctx, t, pool, []catalog.Product{
 		{
 			ID:           "SKU-001",
 			Title:        "测试商品 A",
@@ -25,7 +26,7 @@ func TestCatalogRepo_FindByIDs(t *testing.T) {
 			PrimaryPrice: catalog.MustMoney("29.99", catalog.USD),
 			ImageURL:     "https://example.com/a.jpg",
 			InStock:      true,
-			Attributes:   map[string]string{"color": "red", "size": "M"},
+			Attributes:   map[string]any{"color": "red", "size": "M"},
 			Tags:         []string{"tag-a", "tag-b"},
 			ShipsTo:      []string{"CN", "US"},
 		},
@@ -37,7 +38,7 @@ func TestCatalogRepo_FindByIDs(t *testing.T) {
 			PrimaryPrice: catalog.MustMoney("99.00", catalog.EUR),
 			ImageURL:     "https://example.com/b.jpg",
 			InStock:      false,
-			Attributes:   map[string]string{"color": "blue"},
+			Attributes:   map[string]any{"color": "blue"},
 			Tags:         []string{"tag-b"},
 			ShipsTo:      []string{"CN"},
 		},
@@ -49,7 +50,7 @@ func TestCatalogRepo_FindByIDs(t *testing.T) {
 			PrimaryPrice: catalog.MustMoney("15.50", catalog.USD),
 			ImageURL:     "https://example.com/c.jpg",
 			InStock:      true,
-			Attributes:   map[string]string{"color": "green"},
+			Attributes:   map[string]any{"color": "green"},
 			Tags:         []string{"tag-c"},
 			ShipsTo:      []string{"CN", "US", "EU"},
 		},
@@ -107,7 +108,7 @@ func TestCatalogRepo_ListAll(t *testing.T) {
 	ctx := context.Background()
 	repo := NewCatalogRepo(pool)
 
-	insertProducts(t, ctx, pool, []catalog.Product{
+	insertProducts(ctx, t, pool, []catalog.Product{
 		{
 			ID:           "LIST-001",
 			Title:        "列表商品 1",
@@ -115,7 +116,7 @@ func TestCatalogRepo_ListAll(t *testing.T) {
 			Category:     "cat-x",
 			PrimaryPrice: catalog.MustMoney("10.00", catalog.USD),
 			InStock:      true,
-			Attributes:   map[string]string{},
+			Attributes:   map[string]any{},
 			Tags:         []string{},
 			ShipsTo:      []string{"CN"},
 		},
@@ -126,7 +127,7 @@ func TestCatalogRepo_ListAll(t *testing.T) {
 			Category:     "cat-y",
 			PrimaryPrice: catalog.MustMoney("20.00", catalog.USD),
 			InStock:      true,
-			Attributes:   map[string]string{},
+			Attributes:   map[string]any{},
 			Tags:         []string{},
 			ShipsTo:      []string{"CN"},
 		},
@@ -137,7 +138,7 @@ func TestCatalogRepo_ListAll(t *testing.T) {
 			Category:     "cat-z",
 			PrimaryPrice: catalog.MustMoney("30.00", catalog.USD),
 			InStock:      false,
-			Attributes:   map[string]string{},
+			Attributes:   map[string]any{},
 			Tags:         []string{},
 			ShipsTo:      []string{"CN"},
 		},
@@ -204,9 +205,14 @@ func migrateCatalog(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 // insertProducts 批量插入测试商品。
-func insertProducts(t *testing.T, ctx context.Context, pool *pgxpool.Pool, products []catalog.Product) {
+//
+// ctx 置于 t 之前是为了满足 context-as-argument（ctx 必须是首参）；调用方各自
+// 已持有同一个 ctx，因此不复用 t.Context()，避免出现两个上下文来源。
+func insertProducts(ctx context.Context, t *testing.T, pool *pgxpool.Pool, products []catalog.Product) {
 	t.Helper()
-	for _, prod := range products {
+	// 按下标取址：catalog.Product 约 450 字节，逐元素值拷贝纯属浪费，且此处只读。
+	for i := range products {
+		prod := &products[i]
 		_, err := pool.Exec(ctx, `
 			INSERT INTO catalog.products (
 				id, title, description, category_id,

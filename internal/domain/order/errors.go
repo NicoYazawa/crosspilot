@@ -25,9 +25,6 @@ var (
 	// ErrNotFound 表示按标识未查到订单。
 	ErrNotFound = errors.New("order: 订单不存在")
 
-	// ErrIdempotencyConflict 表示同一幂等键下存在内容不同的订单。
-	ErrIdempotencyConflict = errors.New("order: 幂等键冲突")
-
 	// ErrStaleStatus 表示订单当前状态与预期不符，迁移被拒绝。
 	ErrStaleStatus = errors.New("order: 状态已变更")
 

@@ -30,6 +30,8 @@ type Money struct {
 // 调用方无从察觉。这里把这个沉默的降级转成显式错误。
 func normalize(amount decimal.Decimal, scale int) (decimal.Decimal, error) {
 	rescaled := amount.Rescale(scale)
+	// rescaled.Scale() != scale 说明 Rescale 静默降级（无法补零到目标精度），
+	// 例如 amount=1.5, scale=2 → rescaled=1 (scale=0) ≠ 2，应报错。
 	if rescaled.Scale() != scale {
 		return decimal.Decimal{}, fmt.Errorf(
 			"%w: 金额 %s 超出 %d 位小数可表示的范围", ErrAmountOverflow, amount.String(), scale)

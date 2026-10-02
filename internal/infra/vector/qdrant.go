@@ -1,3 +1,7 @@
+// Package vector 是 Qdrant 向量库的 HTTP 适配器：检索用 Search，灌数据用 Upsert。
+//
+// 只走 HTTP 而不引入官方 SDK：跨语言调用面窄，HTTP 契约足够稳定，
+// 少一个依赖就少一处版本漂移的入口。
 package vector
 
 import (
@@ -32,7 +36,7 @@ type searchResult struct {
 }
 
 // Search queries Qdrant for similar product IDs.
-func (c *QdrantClient) Search(ctx context.Context, embedding []float32, topN int) ([]VectorHit, error) {
+func (c *QdrantClient) Search(ctx context.Context, embedding []float32, topN int) ([]Hit, error) {
 	if c.baseURL == "" {
 		return nil, fmt.Errorf("qdrant client not configured: baseURL is empty")
 	}
@@ -55,7 +59,8 @@ func (c *QdrantClient) Search(ctx context.Context, embedding []float32, topN int
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	// 响应体是只读流，关闭失败不影响已读内容，显式丢弃即可
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -69,15 +74,15 @@ func (c *QdrantClient) Search(ctx context.Context, embedding []float32, topN int
 		return nil, err
 	}
 
-	hits := make([]VectorHit, len(result.Result))
+	hits := make([]Hit, len(result.Result))
 	for i, r := range result.Result {
-		hits[i] = VectorHit{ProductID: r.ID, Score: r.Score}
+		hits[i] = Hit{ProductID: r.ID, Score: r.Score}
 	}
 	return hits, nil
 }
 
 // Upsert inserts or updates product vectors in Qdrant.
-func (c *QdrantClient) Upsert(ctx context.Context, points []VectorPoint) error {
+func (c *QdrantClient) Upsert(ctx context.Context, points []Point) error {
 	if c.baseURL == "" {
 		return fmt.Errorf("qdrant client not configured")
 	}
@@ -98,7 +103,8 @@ func (c *QdrantClient) Upsert(ctx context.Context, points []VectorPoint) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	// 同上：只读响应流，关闭错误无需上报
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
@@ -107,20 +113,20 @@ func (c *QdrantClient) Upsert(ctx context.Context, points []VectorPoint) error {
 	return nil
 }
 
-// VectorPoint describes a product vector to upsert into Qdrant.
-type VectorPoint struct {
+// Point describes a product vector to upsert into Qdrant.
+type Point struct {
 	ID        string
 	Vector    []float32
 	ProductID string
 }
 
-// VectorHit is a single vector search result.
-type VectorHit struct {
+// Hit is a single vector search result.
+type Hit struct {
 	ProductID string
 	Score     float32
 }
 
 // compile-time interface check
 var _ interface {
-	Search(ctx context.Context, embedding []float32, topN int) ([]VectorHit, error)
+	Search(ctx context.Context, embedding []float32, topN int) ([]Hit, error)
 } = (*QdrantClient)(nil)

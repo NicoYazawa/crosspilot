@@ -1,3 +1,4 @@
+// Package ports 是商品域对基础设施侧的端口契约：嵌入、向量检索与重排。
 package ports
 
 import (

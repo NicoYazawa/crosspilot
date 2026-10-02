@@ -2,7 +2,6 @@ package trade
 
 import (
 	"crypto/hmac"
-	"errors"
 	"time"
 
 	"github.com/NicoYazawa/crosspilot/internal/domain/order"
@@ -15,10 +14,7 @@ const (
 	maxSessionIDLen   = 64
 	maxOrderIDLen     = 32
 	maxSKUIDLen       = 64
-	maxTitleLen       = 255
 	maxReasonLen      = 255
-	maxConfirmList    = 20
-	maxOrderPageSize  = 100
 )
 
 // PrepareInput 是发起一次交易确认的输入。
@@ -622,6 +618,3 @@ func requiredText(value, name string, maximum int) (string, error) {
 
 // SnapshotEqual 是恒时比较的对外别名，供存储层比对重建出的载荷摘要。
 func SnapshotEqual(a, b string) bool { return hmac.Equal([]byte(a), []byte(b)) }
-
-// ErrNotPending 供调用方判断「确认单已决议」这一情形。
-var ErrNotPending = errors.New("trade: 确认单已决议")

@@ -7,6 +7,7 @@
 //   - 它们共享同一组依赖
 //   - HTTP 处理器把 uc 整个注入，按需调方法
 //   - 测试时构造一个 usecases 替身就能替代全部用例
+
 package observability
 
 // UseCases 是所有 P5 用例的载体。

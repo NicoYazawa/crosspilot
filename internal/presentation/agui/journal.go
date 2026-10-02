@@ -171,14 +171,3 @@ func (m *MemoryJournal) ListRuns(_ context.Context) ([]RunMeta, error) {
 	})
 	return out, nil
 }
-
-// RunIDs 返回所有已知 run id；外部访问用不上
-func (m *MemoryJournal) RunIDs() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	ids := make([]string, 0, len(m.events))
-	for k := range m.events {
-		ids = append(ids, k)
-	}
-	return ids
-}

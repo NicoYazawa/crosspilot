@@ -8,6 +8,7 @@
 //
 // 生产用的 Postgres sink 不在本文件范围；它在容器装配阶段由独立的适配器实现
 // （PgSink 走 own type + adapter 模式，详见 container/observability/）。
+
 package observability
 
 import (
@@ -64,13 +65,6 @@ func (m *MemorySink) Records() []SinkRecord {
 	out := make([]SinkRecord, len(m.records))
 	copy(out, m.records)
 	return out
-}
-
-// SetFailNext 设置下一次 Append 调用失败。测试用。
-func (m *MemorySink) SetFailNext() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.failN = 1
 }
 
 // SetFailN 设置前 N 次 Append 失败。测试用。

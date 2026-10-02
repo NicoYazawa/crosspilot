@@ -26,6 +26,9 @@ import (
 // 路由分发，写错了会被静默丢弃。
 type Kind string
 
+// KindRunStart 是 run 开始事件，其后依次是模型轮次、工具调用、工具结果、
+// run 结束、run 错误、服务重启与心跳。这些取值都会原样落进 journal 与 SSE，
+// 因此只能增删常量，不能在别处手写同名字符串。
 const (
 	KindRunStart      Kind = "run_start"
 	KindModelTurn     Kind = "model_turn"
@@ -34,8 +37,13 @@ const (
 	KindRunFinished   Kind = "run_finished"
 	KindRunError      Kind = "run_error"
 	KindServerRestart Kind = "server_restart"
-	KindA2UI          Kind = "a2ui"
 	KindHeartbeat     Kind = "heartbeat"
+	// KindA2UI 承载 A2UI 报文（createSurface / updateComponents / updateDataModel）。
+	//
+	// 与其它 kind 不同，它的 payload 不是「这次 run 发生了什么」的叙述，而是
+	// 一份要交给前端渲染的界面描述。前端按 kind === 'a2ui' 分派到 A2UI 渲染器，
+	// 因此这个字符串必须与前端一致，不能改。
+	KindA2UI Kind = "a2ui"
 )
 
 // Event 是不可变事件记录。

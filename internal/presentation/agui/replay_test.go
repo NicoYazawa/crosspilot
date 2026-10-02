@@ -93,10 +93,8 @@ func TestCheckGap_RejectsGap(t *testing.T) {
 	var ge *agui.GapError
 	if !errors.As(err, &ge) {
 		t.Errorf("应返回 *GapError，实际 %v", err)
-	} else {
-		if ge.Expected != 6 || ge.Actual != 7 {
-			t.Errorf("GapError 字段不对：%+v", ge)
-		}
+	} else if ge.Expected != 6 || ge.Actual != 7 {
+		t.Errorf("GapError 字段不对：%+v", ge)
 	}
 }
 

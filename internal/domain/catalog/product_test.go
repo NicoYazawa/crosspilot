@@ -34,7 +34,7 @@ func validProduct() Product {
 		SourceLanguage: "zh",
 		SourceLocale:   "zh-CN",
 		DataProvenance: "imported",
-		Attributes:     map[string]string{"颜色": "黑"},
+		Attributes:     map[string]any{"颜色": "黑"},
 	}
 }
 
@@ -51,6 +51,10 @@ func TestProductValidateRejectsBadInput(t *testing.T) {
 	}{
 		{"ID 为空", func(p *Product) { p.ID = "" }},
 		{"标题为空", func(p *Product) { p.Title = "" }},
+		{"无有效价格", func(p *Product) {
+			p.PrimaryPrice = Money{}
+			p.SKUs = []SKU{{ID: "S1", Price: Money{Currency: Currency("")}}}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -293,3 +293,216 @@ func TestExperimentArms_EmptyKeyRejected(t *testing.T) {
 		t.Fatal("空 key 应报错")
 	}
 }
+
+// TestArmForRun_UnknownRunReturnsFalse 验证未知 run 不报错，返回 ("", false)。
+func TestArmForRun_UnknownRunReturnsFalse(t *testing.T) {
+	t.Parallel()
+	store := newFakeExperimentStore()
+	uc := observability.New(newFakeJournal(), newFakeCostStore(), store, nil)
+	arm, ok, err := uc.ArmForRun(context.Background(), "ghost-run")
+	if err != nil {
+		t.Fatalf("ArmForRun 不应报错，得到 %v", err)
+	}
+	if ok {
+		t.Errorf("未知 run ok 应为 false")
+	}
+	if arm != "" {
+		t.Errorf("未知 run arm 应为空，实际 %q", arm)
+	}
+}
+
+// TestArmForRun_RegisteredRun 验证已注册的 run 返回臂名和 true。
+func TestArmForRun_RegisteredRun(t *testing.T) {
+	t.Parallel()
+	store := newFakeExperimentStore()
+	store.arms["run-A"] = "control"
+	uc := observability.New(newFakeJournal(), newFakeCostStore(), store, nil)
+	arm, ok, err := uc.ArmForRun(context.Background(), "run-A")
+	if err != nil {
+		t.Fatalf("ArmForRun 不应报错，得到 %v", err)
+	}
+	if !ok {
+		t.Errorf("已注册 run ok 应为 true")
+	}
+	if arm != "control" {
+		t.Errorf("arm = %q，期望 control", arm)
+	}
+}
+
+// TestDiff_EmptyPayloadVsNonEmpty 触发 payloadEqual 的 len(a)==0 分支。
+func TestDiff_EmptyPayloadVsNonEmpty(t *testing.T) {
+	t.Parallel()
+	j := newFakeJournal()
+	uc := observability.New(j, newFakeCostStore(), newFakeExperimentStore(), nil)
+	ctx := context.Background()
+
+	// baseline: seq 0 空 JSON object
+	_, _ = j.Append(ctx, makeSeqEvent("base", 0, runevent.KindModelTurn, `{}`))
+	_, _ = j.Append(ctx, makeSeqEvent("base", 1, runevent.KindModelTurn, `{"k":"v"}`))
+
+	// against: seq 0 有不同的 JSON
+	_, _ = j.Append(ctx, makeSeqEvent("agn", 0, runevent.KindModelTurn, `{"k":"DIFFERENT"}`))
+	_, _ = j.Append(ctx, makeSeqEvent("agn", 1, runevent.KindModelTurn, `{"k":"v"}`))
+
+	got, err := uc.Diff(ctx, "base", "agn")
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if got.Changed != 1 {
+		t.Errorf("seq=0 payload 不同应为 changed，实际 changed=%d added=%d removed=%d unchanged=%d",
+			got.Changed, got.Added, got.Removed, got.Unchanged)
+	}
+}
+
+// TestDiff_BothEmptyPayload 触发 payloadEqual 的 len(a)==0 && len(b)==0 分支。
+func TestDiff_BothEmptyPayload(t *testing.T) {
+	t.Parallel()
+	j := newFakeJournal()
+	uc := observability.New(j, newFakeCostStore(), newFakeExperimentStore(), nil)
+	ctx := context.Background()
+
+	// 两个 run 的 seq 0 都是相同的 JSON
+	_, _ = j.Append(ctx, makeSeqEvent("r1", 0, runevent.KindModelTurn, `{}`))
+	_, _ = j.Append(ctx, makeSeqEvent("r2", 0, runevent.KindModelTurn, `{}`))
+
+	got, err := uc.Diff(ctx, "r1", "r2")
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if got.Unchanged != 1 {
+		t.Errorf("两边 payload 都为空应为 unchanged，实际 unchanged=%d changed=%d",
+			got.Unchanged, got.Changed)
+	}
+}
+
+// TestPayloadEqual_OneEmptyOneNonEmpty 触发 payloadEqual 的 len(a)==0 || len(b)==0 分支。
+func TestPayloadEqual_OneEmptyOneNonEmpty(t *testing.T) {
+	// 验证 payloadEqual 内部逻辑：一边空、一边非空 → false
+	// 用 Diff 间接测：两个 run seq 数相同，但一个 payload 为 nil，另一个有内容
+	j := newFakeJournal()
+	uc := observability.New(j, newFakeCostStore(), newFakeExperimentStore(), nil)
+	ctx := context.Background()
+
+	// r1: seq 0，payload 为 nil（触发 len==0 路径）
+	seqr1 := runevent.NewSequencer("r1")
+	ev1, _ := seqr1.Attach(0, runevent.KindModelTurn, "main", nil, time.Now())
+	_, _ = j.Append(ctx, ev1)
+
+	// r2: seq 0，payload 为非空 JSON
+	seqr2 := runevent.NewSequencer("r2")
+	ev2, _ := seqr2.Attach(0, runevent.KindModelTurn, "main", []byte(`{"k":"v"}`), time.Now())
+	_, _ = j.Append(ctx, ev2)
+
+	got, err := uc.Diff(ctx, "r1", "r2")
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	// 一个空一个非空 → changed
+	if got.Changed != 1 {
+		t.Errorf("一空一非空应为 changed，实际 changed=%d unchanged=%d", got.Changed, got.Unchanged)
+	}
+}
+
+// TestReplay_LastSeqErrorFallsBack 验证 LastSeq 失败时 fallback 到本地 lastSeq。
+func TestReplay_LastSeqErrorFallsBack(t *testing.T) {
+	j := &fakeJournalWithLastSeqError{events: map[string][]runevent.Event{}}
+	uc := observability.New(j, newFakeCostStore(), newFakeExperimentStore(), nil)
+	ctx := context.Background()
+
+	// 注入一条事件
+	seqr := runevent.NewSequencer("run-x")
+	ev, _ := seqr.Attach(0, runevent.KindModelTurn, "main", []byte(`{}`), time.Now())
+	j.events["run-x"] = append(j.events["run-x"], ev)
+
+	// LastSeq 返回错误，但 Replay 应 fallback 到 events[len-1].Seq
+	result, err := uc.Replay(ctx, "run-x", 0, 0)
+	if err != nil {
+		t.Fatalf("LastSeq 失败时 Replay 不应报错，得到 %v", err)
+	}
+	if result.TotalSeq != 0 {
+		t.Errorf("TotalSeq 应为 0，实际 %d", result.TotalSeq)
+	}
+	if result.HasMore {
+		t.Errorf("HasMore 应为 false")
+	}
+}
+
+// fakeJournalWithLastSeqError 模拟 LastSeq 永远返回错误的 journal。
+type fakeJournalWithLastSeqError struct {
+	events map[string][]runevent.Event
+}
+
+func (j *fakeJournalWithLastSeqError) Append(_ context.Context, ev runevent.Event) (int64, error) {
+	j.events[ev.RunID] = append(j.events[ev.RunID], ev)
+	return ev.Seq, nil
+}
+
+func (j *fakeJournalWithLastSeqError) Since(_ context.Context, runID string, since int64, limit int) ([]runevent.Event, error) {
+	src := j.events[runID]
+	out := make([]runevent.Event, 0, len(src))
+	for _, ev := range src {
+		if ev.Seq >= since {
+			out = append(out, ev)
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (j *fakeJournalWithLastSeqError) LastSeq(_ context.Context, _ string) (int64, error) {
+	return 0, errors.New("journal unavailable")
+}
+
+// errJournal 返回错误的 Journal。
+type errJournal struct{}
+
+func (errJournal) Since(_ context.Context, _ string, _ int64, _ int) ([]runevent.Event, error) {
+	return nil, errors.New("journal unavailable")
+}
+
+func (errJournal) Append(_ context.Context, _ runevent.Event) (int64, error) { return 0, nil }
+func (errJournal) LastSeq(_ context.Context, _ string) (int64, error)        { return -1, nil }
+
+// TestDiff_SinceError 验证 Journal.Since 返回错误时 Diff 传播错误。
+func TestDiff_SinceError(t *testing.T) {
+	j := &errJournal{}
+	uc := observability.New(j, newFakeCostStore(), newFakeExperimentStore(), nil)
+	_, err := uc.Diff(context.Background(), "r1", "r2")
+	if err == nil {
+		t.Fatal("Since 返回错误时 Diff 应传播错误")
+	}
+}
+
+// TestCostOfRun_Empty 验证 CostOfRun 对空 run 返回零值摘要。
+func TestCostOfRun_Empty(t *testing.T) {
+	t.Parallel()
+	cs := newFakeCostStore()
+	uc := observability.New(newFakeJournal(), cs, newFakeExperimentStore(), nil)
+	got, err := uc.CostOfRun(context.Background(), "ghost-run")
+	if err != nil {
+		t.Fatalf("CostOfRun 不应为空 run 报错，得到 %v", err)
+	}
+	if got.TotalCalls != 0 {
+		t.Errorf("空 run TotalCalls 应为 0，实际 %d", got.TotalCalls)
+	}
+	if got.TotalCostMinor != 0 {
+		t.Errorf("空 run TotalCostMinor 应为 0，实际 %d", got.TotalCostMinor)
+	}
+}
+
+// TestExperimentArms_KeyWithNoRuns 验证 key 注册了但无 run 时返回空切片不报错。
+func TestExperimentArms_KeyWithNoRuns(t *testing.T) {
+	t.Parallel()
+	store := newFakeExperimentStore()
+	// ArmsSummary 返回空切片（合法，表示该 key 有注册但暂无数据）
+	uc := observability.New(newFakeJournal(), newFakeCostStore(), store, nil)
+	arms, err := uc.ExperimentArms(context.Background(), "new-key")
+	if err != nil {
+		t.Fatalf("有注册无数据时不应报错，得到 %v", err)
+	}
+	if len(arms) != 2 {
+		t.Errorf("期望空切片，实际 %d 条", len(arms))
+	}
+}

@@ -27,24 +27,15 @@ import (
 	"time"
 
 	"github.com/NicoYazawa/crosspilot/internal/agent/runevent"
+	domainobs "github.com/NicoYazawa/crosspilot/internal/domain/observability"
 )
 
 // SinkRecord 是观测用的事件形态。
 //
-// PayloadRedacted 是已脱敏 JSON（写路径脱敏完成）。PayloadSHA256 是脱敏后
-// 内容的 SHA-256，用于完整性校验与去重。PayloadSize 是原始 payload 长度，
-// 用于面板的「压缩比」指标。
-type SinkRecord struct {
-	EventID         string
-	RunID           string
-	Seq             int64
-	Kind            string
-	Agent           string
-	PayloadSHA256   string
-	PayloadSize     int
-	PayloadRedacted []byte
-	CreatedAt       int64
-}
+// 定义放在 domain/observability：Sink 的实现在基础设施层，如果记录类型跟着
+// 端口留在这里，infra 就必须反向依赖本包。别名保证调用方写 agentobs.SinkRecord
+// 依然成立，类型只有一个。
+type SinkRecord = domainobs.SinkRecord
 
 // Sink 是 Emitter 的下游端口。
 //
@@ -70,9 +61,6 @@ type Sink interface {
 type Redactor interface {
 	Apply(in []byte) ([]byte, error)
 }
-
-// ErrEmitterStopped 表示 Emitter 已停止（Run 退出后调用 Emit）。
-var ErrEmitterStopped = errors.New("observability: emitter 已停止")
 
 // EmitterConfig 是构造 Emitter 的参数。
 type EmitterConfig struct {
@@ -192,7 +180,11 @@ func (e *Emitter) Emit(ev *runevent.Event) {
 		PayloadSHA256:   hashSHA256(payloadRedacted),
 		PayloadSize:     len(ev.Payload),
 		PayloadRedacted: payloadRedacted,
-		CreatedAt:       ev.CreatedAt.UnixNano(),
+		// Unix 秒，不是 UnixNano：SinkRecord.CreatedAt 的契约是秒（见
+		// domain/observability.SinkRecord），pg 侧按 time.Unix(sec, 0) 还原成
+		// TIMESTAMPTZ。传纳秒会让还原出的年份溢出到 int64 微秒表达不了的范围，
+		// 整批写入直接失败——而失败又被 Emitter 计入 dropped 静默吞掉。
+		CreatedAt: ev.CreatedAt.Unix(),
 	}
 
 	select {
@@ -205,22 +197,44 @@ func (e *Emitter) Emit(ev *runevent.Event) {
 	}
 }
 
-// Run 是后台 worker 循环：ctx 取消时退出。
+// Start 在后台 goroutine 里跑 worker 循环，供服务启动时调用。
+//
+// 与 `go e.Run(ctx)` 的区别只有一处，但这一处是必须的：wg.Add 发生在 **goroutine
+// 启动之前**。若把 Add 留在 Run 内部，Close 可能在 goroutine 真正被调度起来之前
+// 就走到 wg.Wait()——Wait 看到计数还是 0 会立刻返回，于是 sink.Close() 与循环的
+// 最后一次 flush 并发：最后一批要么写进一个已关闭的 sink，要么在进程退出时被
+// 整个丢掉，而两种表现都不响（日志里什么都没有）。启动期调用一律用这个。
+func (e *Emitter) Start(ctx context.Context) {
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		e.run(ctx)
+	}()
+}
+
+// Run 同步阻塞地跑 worker 循环：ctx 取消时退出。
 //
 // 调用方在服务启动时启一个 goroutine 跑这个函数，退出时 wait。
+// 新代码优先用 Start——它把「注册到 waitgroup」提前到 goroutine 启动之前。
 //
 // Run 退出后 Queue 中残留的记录**不保证全部 flush**（语义上"best-effort"）：
 // 已塞进 channel 的事件尽量消费，但超出 batch+flush 间隔的不再等待。
 func (e *Emitter) Run(ctx context.Context) {
 	e.wg.Add(1)
 	defer e.wg.Done()
+	e.run(ctx)
+}
 
+// run 是 worker 循环本体，不碰 waitgroup——由 Run / Start 各自决定怎么记账。
+func (e *Emitter) run(ctx context.Context) {
 	ticker := time.NewTicker(e.cfg.FlushEvery)
 	defer ticker.Stop()
 
 	batch := make([]SinkRecord, 0, e.cfg.BatchSize)
 
-	flush := func(reason string) {
+	// reason 目前只用于调用点自解释（ctx_done / closed / batch_full / interval），
+	// 落库与计数都不依赖它，因此按未使用参数处理。
+	flush := func(_ string) {
 		if len(batch) == 0 {
 			return
 		}
@@ -242,6 +256,14 @@ func (e *Emitter) Run(ctx context.Context) {
 			return
 
 		case <-e.closed:
+			// 关闭前把队列里已经收下的记录全部收进本批再写。
+			//
+			// 不这么做会丢数据：select 在 e.closed 与 e.queue 同时就绪时**随机**
+			// 选一个分支，选到 closed 就直接返回，而此刻还躺在 channel 里、尚未
+			// 被读进 batch 的记录（最多一整个队列）永远不会再被处理——它们在
+			// Emit 返回时就已经被调用方当成「发出去了」。默认 BatchSize=64、
+			// FlushEvery=100ms，正常关闭时积压几十条是常态。
+			batch = e.drainQueued(batch)
 			flush("closed")
 			e.stopped.Store(true)
 			return
@@ -258,7 +280,28 @@ func (e *Emitter) Run(ctx context.Context) {
 	}
 }
 
+// drainQueued 把队列里当前积压的记录非阻塞地全部收进 batch。
+//
+// 上限是队列容量：正常关闭时生产者（agent run）已经结束，一次排空即可；
+// 设上限是为了「有生产者还在持续 Emit」时也能确定地收敛，而不是死循环。
+// 超出上限的部分由 Close 的语义兜底——它们是关闭信号之后才产生的，
+// 本就不在这次「优雅关闭」的承诺范围内。
+func (e *Emitter) drainQueued(batch []SinkRecord) []SinkRecord {
+	for i := 0; i < cap(e.queue); i++ {
+		select {
+		case rec := <-e.queue:
+			batch = append(batch, rec)
+		default:
+			return batch
+		}
+	}
+	return batch
+}
+
 // Close 通知 Run 退出并等待。
+//
+// 关闭后队列中已收下的记录会被写库（见 run 的 closed 分支），因此 Close 返回
+// 即意味着「关之前发生的事件都已尽力落库」。之后再 Emit 一律计入 dropped。
 func (e *Emitter) Close() error {
 	if e.stopped.Load() {
 		return nil

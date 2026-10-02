@@ -2,6 +2,7 @@ package tools
 
 // Order tool definitions (create, query, cancel)
 
+// CreateOrderToolDef 返回 create_order_tool 的 JSON Schema 声明。
 func CreateOrderToolDef() ToolDef {
 	return ToolDef{
 		Name:        "create_order_tool",
@@ -55,6 +56,7 @@ func CreateOrderToolDef() ToolDef {
 	}
 }
 
+// QueryOrderToolDef 返回 query_order_tool 的 JSON Schema 声明。
 func QueryOrderToolDef() ToolDef {
 	return ToolDef{
 		Name:        "query_order_tool",
@@ -72,6 +74,7 @@ func QueryOrderToolDef() ToolDef {
 	}
 }
 
+// CancelOrderToolDef 返回 cancel_order_tool 的 JSON Schema 声明。
 func CancelOrderToolDef() ToolDef {
 	return ToolDef{
 		Name:        "cancel_order_tool",

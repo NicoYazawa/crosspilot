@@ -7,39 +7,39 @@
 package fakemodel
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
+
+	"github.com/NicoYazawa/crosspilot/internal/agent/protocol"
 )
 
-// ToolCall 是 fake model 在某一轮应当发出的工具调用。
-type ToolCall struct {
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
-}
+// 下面三个类型是协议类型的别名，不是各自定义。
+//
+// 用别名而不是定义新类型：协议类型原本就住在本包，后来搬去了 protocol 包
+// （生产接口不该返回测试夹具的类型）。别名让既有测试里几十处
+// `fakemodel.Response{...}` / `fakemodel.ToolCall{...}` 一个字都不用改，
+// 同时它们现在共享的正是适配器与编排层使用的那套类型——测试构造的响应，
+// 与真实适配器返回的响应，是同一个结构体。
+type (
+	// ToolCall 是模型发起的一次工具调用。
+	ToolCall = protocol.ToolCall
 
-// Step 是 fake model 的一轮输出。
-type Step struct {
-	// Content 是这一轮返回给用户的文本。空字符串也可以。
-	Content string `json:"content"`
-	// Calls 是这一轮要执行的工具调用，按顺序串行执行。
-	Calls []ToolCall `json:"calls"`
-	// Err 表示这一轮应当以错误返回。优先级最高（覆盖 Content/Calls）。
-	Err error `json:"-"`
-}
+	// Step 是模型的一轮输出。
+	Step = protocol.Step
 
-// Response is one full assistant turn from the fake model.
-type Response struct {
-	Step
-}
+	// Response 是一次完整的模型回合。
+	Response = protocol.Response
+)
 
 // FakeModel implements a scriptable model for tests.
 type FakeModel struct {
 	mu      sync.Mutex
 	steps   []Response
 	current int
-	// OnNext is called after every call; tests use it to inspect prompts/counters.
-	OnNext func(prompt string) string
+	// OnNext is called after every call; tests use it to inspect requests/counters.
+	OnNext func(req protocol.Request)
 }
 
 // New creates a FakeModel from a script of responses.
@@ -47,16 +47,18 @@ func New(steps ...Response) *FakeModel {
 	return &FakeModel{steps: steps}
 }
 
-// Next advances to the next scripted response.
+// Next 实现 orchestrator.DecisionProvider：返回脚本里的下一轮响应。
 //
-// Returns the next Response and a snapshot of how many steps remain (including current).
-// If the script is exhausted, returns an error so the agent loop terminates.
-func (f *FakeModel) Next(prompt string) (Response, error) {
+// 参数（ctx 与 request）在这里被忽略——fake 的意义就是不管输入都给出确定输出。
+// 需要断言「编排层到底喂了什么给模型」的用例，用 OnNext 取 req。
+//
+// 脚本耗尽时返回错误，让 ReAct 循环终止而不是空转。
+func (f *FakeModel) Next(_ context.Context, req protocol.Request) (Response, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	if f.OnNext != nil {
-		f.OnNext(prompt)
+		f.OnNext(req)
 	}
 
 	if f.current >= len(f.steps) {
@@ -77,23 +79,6 @@ func (f *FakeModel) CallsSoFar() int {
 	return f.current
 }
 
-// Remaining returns how many scripted steps are still unconsumed.
-func (f *FakeModel) Remaining() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.steps) - f.current
-}
-
-// MustArgs parses tool call arguments; panics on malformed JSON so test scripts
-// can stay terse.
-func MustArgs(raw string) map[string]any {
-	var m map[string]any
-	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		panic("fakemodel: 参数 JSON 不合法：" + err.Error())
-	}
-	return m
-}
-
 // MustArgsRaw returns the raw JSON for passing directly to a tool.
 func MustArgsRaw(raw string) json.RawMessage {
 	if !json.Valid([]byte(raw)) {
@@ -101,11 +86,3 @@ func MustArgsRaw(raw string) json.RawMessage {
 	}
 	return json.RawMessage(raw)
 }
-
-// ContextKey is the standard request key passed by the orchestrator.
-type ContextKey string
-
-const (
-	// KeyPrompt is the user-facing prompt passed into Next().
-	KeyPrompt ContextKey = "prompt"
-)

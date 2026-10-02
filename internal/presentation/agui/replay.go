@@ -3,6 +3,9 @@
 // SSE 协议把 cursor 放在 `Last-Event-ID` 头或查询参数 cursor 里，形式是
 // `{runId}:{seq}`。客户端与服务端用这条信息续传；任何错位都必须在协议层
 // 显式拒绝，而不是悄悄接受造成数据不一致。
+//
+// 空行把它与 package 子句隔开：本包的包注释在 journal.go，见那里的说明。
+
 package agui
 
 import (

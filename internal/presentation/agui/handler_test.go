@@ -3,10 +3,8 @@ package agui_test
 import (
 	"bufio"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NicoYazawa/crosspilot/internal/agent/protocol"
 	"github.com/NicoYazawa/crosspilot/internal/agent/runevent"
 	"github.com/NicoYazawa/crosspilot/internal/presentation/agui"
+	presauth "github.com/NicoYazawa/crosspilot/internal/presentation/auth"
 )
 
 // fakeSubmitter 记录每次 Submit 进来的请求；用于 E4 验证「重连不重计费」。
@@ -42,6 +42,16 @@ func (f *fakeSubmitter) CallCount() int {
 	return len(f.calls)
 }
 
+// LastCall 返回最后一次收到的提交请求；没有调用时 ok=false。
+func (f *fakeSubmitter) LastCall() (agui.SubmitRequest, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.calls) == 0 {
+		return agui.SubmitRequest{}, false
+	}
+	return f.calls[len(f.calls)-1], true
+}
+
 func discardLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
@@ -52,9 +62,27 @@ func makeDeps(j agui.JournalStore, sub agui.RunSubmitter) agui.Deps {
 		Journal:   j,
 		Submitter: sub,
 		Logger:    discardLog(),
-		Heartbeat: 0,
 	}
 }
+
+// serveWithIdentity 把 AG-UI 路由套上身份中间件再执行，模拟装配层的真实链路。
+//
+// Routes 自己不带鉴权（见其文档：身份由挂载层提供），所以直接调 Routes 等于
+// 在测一条生产环境不存在的链路——submit 会因为拿不到买家身份而 401。
+// 这里复刻 router.go 的挂载方式：先读会话头，再补 demo 身份。
+func serveWithIdentity(deps agui.Deps, req *http.Request) *httptest.ResponseRecorder {
+	h := presauth.SessionHeader()(
+		presauth.DemoIdentity(demoBuyer, demoSession)(agui.Routes(deps)))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// 测试用的固定身份，与 router.go 的 demoBuyerID / demoSessionID 同构。
+const (
+	demoBuyer   = "test-buyer"
+	demoSession = "test-session"
+)
 
 // submitEventsJSON 构造 submitter 的响应：n 条 RunEvent。
 func submitEventsJSON(runID string, n int) []runevent.Event {
@@ -132,7 +160,7 @@ func TestE1_ResumeContinuity(t *testing.T) {
 	runID := "run-e1"
 	seedJournal(t, j, runID, 5) // seq 0..4
 
-	req := httptest.NewRequest(http.MethodGet, "/agui/runs/"+runID+"/events", nil)
+	req := httptest.NewRequest(http.MethodGet, "/runs/"+runID+"/events", nil)
 	req.Header.Set("Last-Event-ID", runID+":2")
 
 	rec := httptest.NewRecorder()
@@ -157,7 +185,11 @@ func TestE1_ResumeContinuity(t *testing.T) {
 			continue
 		}
 		var got int64
-		fmt.Sscanf(f.ID, runID+":%d:", &got)
+		// 解析失败必须让测试失败：忽略错误时 got 保持零值，只要期望值不是 0
+		// 就会「恰好」报错，而期望值一旦真是 0 就会把畸形 id 放过。
+		if _, err := fmt.Sscanf(f.ID, runID+":%d:", &got); err != nil {
+			t.Fatalf("id %q 不是 %s:<seq>: 形态：%v", f.ID, runID, err)
+		}
 		if got != wantSeq {
 			t.Errorf("期望 id 含 seq=%d，实际 %q", wantSeq, f.ID)
 		}
@@ -168,13 +200,63 @@ func TestE1_ResumeContinuity(t *testing.T) {
 	}
 }
 
+// TestSSEDataCarriesWholeEvent 钉住 data 行的形态：它是完整的 runevent.Event，
+// 不是只有 payload。
+//
+// 这条契约曾经两边都没测：后端这套用例只解析 id 行，从不看 data 里有什么；前端
+// 用例喂的是自己拼好的完整事件。于是真链路上前端按 data.seq 做缺口检测（附录 C
+// 第 4 条要求游标连续），读到 undefined，把每一条事件都当畸形帧丢掉——页面一条
+// 消息、一张卡片都渲染不出来，而两端测试全绿。见 writeSSE 的说明。
+func TestSSEDataCarriesWholeEvent(t *testing.T) {
+	j := agui.NewMemoryJournal()
+	runID := "run-data-shape"
+	seeded := seedJournal(t, j, runID, 4)
+
+	req := httptest.NewRequest(http.MethodGet, "/runs/"+runID+"/events", nil)
+	rec := httptest.NewRecorder()
+	agui.Routes(makeDeps(j, &fakeSubmitter{})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d，期望 200", rec.Code)
+	}
+	frames := parseSSE(t, rec.Body)
+	if len(frames) != len(seeded) {
+		t.Fatalf("帧数 = %d，期望 %d", len(frames), len(seeded))
+	}
+
+	for i, f := range frames {
+		want := seeded[i]
+		var got runevent.Event
+		if err := json.Unmarshal([]byte(f.Data), &got); err != nil {
+			t.Fatalf("第 %d 帧的 data 无法解析成 runevent.Event：%v（data=%s）", i, err, f.Data)
+		}
+		// 客户端实际依赖的四项：seq 判缺口、kind 分桶、run_id 认归属、
+		// event_id 与 id 行对齐（断线续传要用它算游标）。
+		if got.Seq != want.Seq {
+			t.Errorf("第 %d 帧 data.seq = %d，期望 %d", i, got.Seq, want.Seq)
+		}
+		if got.Kind != want.Kind {
+			t.Errorf("第 %d 帧 data.kind = %q，期望 %q", i, got.Kind, want.Kind)
+		}
+		if got.RunID != runID {
+			t.Errorf("第 %d 帧 data.run_id = %q，期望 %q", i, got.RunID, runID)
+		}
+		if got.EventID != f.ID {
+			t.Errorf("第 %d 帧 data.event_id = %q，而 id 行 = %q，两者必须一致", i, got.EventID, f.ID)
+		}
+		if string(got.Payload) != string(want.Payload) {
+			t.Errorf("第 %d 帧 data.payload = %s，期望 %s", i, got.Payload, want.Payload)
+		}
+	}
+}
+
 // TestE2_GapRejected 验收 E2：cursor.Seq+1 != LastSeq 时拒绝重连。
 func TestE2_GapRejected(t *testing.T) {
 	j := agui.NewMemoryJournal()
 	runID := "run-e2"
 	seedJournal(t, j, runID, 5) // lastSeq=4
 
-	req := httptest.NewRequest(http.MethodGet, "/agui/runs/"+runID+"/events", nil)
+	req := httptest.NewRequest(http.MethodGet, "/runs/"+runID+"/events", nil)
 	req.Header.Set("Last-Event-ID", runID+":7") // 跳过 5,6
 
 	rec := httptest.NewRecorder()
@@ -194,7 +276,7 @@ func TestE3_CrossRunRejected(t *testing.T) {
 	runID := "run-e3"
 	seedJournal(t, j, runID, 3)
 
-	req := httptest.NewRequest(http.MethodGet, "/agui/runs/"+runID+"/events", nil)
+	req := httptest.NewRequest(http.MethodGet, "/runs/"+runID+"/events", nil)
 	req.Header.Set("Last-Event-ID", "run-other:1")
 
 	rec := httptest.NewRecorder()
@@ -217,7 +299,7 @@ func TestE4_ReconnectDoesNotCallModel(t *testing.T) {
 	sub := &fakeSubmitter{}
 
 	for i := 0; i < 3; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/agui/runs/"+runID+"/events", nil)
+		req := httptest.NewRequest(http.MethodGet, "/runs/"+runID+"/events", nil)
 		req.Header.Set("Last-Event-ID", fmt.Sprintf("%s:%d", runID, 2+i))
 		rec := httptest.NewRecorder()
 		agui.Routes(makeDeps(j, sub)).ServeHTTP(rec, req)
@@ -295,7 +377,7 @@ func TestE1_EmptyJournalResume(t *testing.T) {
 	j := agui.NewMemoryJournal()
 	runID := "run-empty"
 
-	req := httptest.NewRequest(http.MethodGet, "/agui/runs/"+runID+"/events", nil)
+	req := httptest.NewRequest(http.MethodGet, "/runs/"+runID+"/events", nil)
 	req.Header.Set("Last-Event-ID", runID+":0") // since=1, lastSeq=-1 → 1<=0 错误
 
 	rec := httptest.NewRecorder()
@@ -315,7 +397,7 @@ func TestE1_EmptyJournalFirstSub(t *testing.T) {
 	j := agui.NewMemoryJournal()
 	runID := "run-empty"
 
-	req := httptest.NewRequest(http.MethodGet, "/agui/runs/"+runID+"/events", nil)
+	req := httptest.NewRequest(http.MethodGet, "/runs/"+runID+"/events", nil)
 
 	rec := httptest.NewRecorder()
 	agui.Routes(makeDeps(j, &fakeSubmitter{})).ServeHTTP(rec, req)
@@ -340,15 +422,27 @@ func TestSubmitEndpoint_CallsSubmitter(t *testing.T) {
 		"query":      "test",
 		"agent":      "main",
 	})
-	req := httptest.NewRequest(http.MethodPost, "/agui/runs", nil)
+	req := httptest.NewRequest(http.MethodPost, "/run", nil)
 	req.Body = io.NopCloser(strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 
-	rec := httptest.NewRecorder()
-	agui.Routes(makeDeps(j, sub)).ServeHTTP(rec, req)
+	rec := serveWithIdentity(makeDeps(j, sub), req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状态码=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 身份必须来自中间件，而不是请求体：body 里写的是 b1/s1，
+	// submitter 收到的必须是中间件算出的 test-buyer/test-session。
+	got, ok := sub.LastCall()
+	if !ok {
+		t.Fatal("submitter 未被调用")
+	}
+	if got.BuyerID != demoBuyer {
+		t.Errorf("BuyerID = %q，期望来自上下文的 %q（请求体不得覆盖身份）", got.BuyerID, demoBuyer)
+	}
+	if got.SessionID != demoSession {
+		t.Errorf("SessionID = %q，期望来自请求头的 %q", got.SessionID, demoSession)
 	}
 	if sub.CallCount() != 1 {
 		t.Errorf("Submitter 应被调用 1 次，实际 %d", sub.CallCount())
@@ -361,46 +455,6 @@ func TestSubmitEndpoint_CallsSubmitter(t *testing.T) {
 	evs, ok := resp["events"].([]any)
 	if !ok || len(evs) != 2 {
 		t.Errorf("响应 events 长度 = %d", len(evs))
-	}
-}
-
-// TestConfirmEndpoint_WritesEvent 验证 POST /runs/{id}/confirm 把决议写入 journal。
-func TestConfirmEndpoint_WritesEvent(t *testing.T) {
-	j := agui.NewMemoryJournal()
-	runID := "confirm-run"
-	seedJournal(t, j, runID, 3)
-
-	body, _ := json.Marshal(map[string]any{
-		"confirmation_id": "conf-001",
-		"approved":        true,
-	})
-	req := httptest.NewRequest(http.MethodPost, "/agui/runs/"+runID+"/confirm", nil)
-	req.Body = io.NopCloser(strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-
-	rec := httptest.NewRecorder()
-	agui.Routes(makeDeps(j, &fakeSubmitter{})).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("状态码=%d body=%s", rec.Code, rec.Body.String())
-	}
-
-	last, err := j.LastSeq(context.Background(), runID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if last != 3 {
-		t.Errorf("追加后 lastSeq 应为 3，实际 %d", last)
-	}
-
-	tail, _ := j.Since(context.Background(), runID, last, 1)
-	var payload map[string]any
-	_ = json.Unmarshal(tail[0].Payload, &payload)
-	if payload["confirmation_id"] != "conf-001" {
-		t.Errorf("payload.confirmation_id = %v", payload["confirmation_id"])
-	}
-	if payload["approved"] != true {
-		t.Errorf("payload.approved 应为 true，实际 %v", payload["approved"])
 	}
 }
 
@@ -452,63 +506,371 @@ func TestE6_A2UI_ThreeMessagesAreValid(t *testing.T) {
 	}
 }
 
-// hmacTestSecret 是 HMAC 单元测试用的占位密钥。
-//
-// 长自描述字符串：任何审计工具一眼能识别为「这是 fixture，不是真凭据」，
-// 也不会被误判为泄漏的生产密钥。生产密钥通过 AUTH_JWT_SECRET 环境变量注入，
-// 与本常量无任何关联。
-const hmacTestSecret = "FIXME-placeholder-key-for-hmac-unit-test-only-do-not-use-in-prod"
+// --- additional error-branch tests ---
 
-// TestHMACAuth_AllowsRequestWithValidSignature 验证 HMAC 鉴权通过。
-func TestHMACAuth_AllowsRequestWithValidSignature(t *testing.T) {
-	secret := []byte(hmacTestSecret)
-	path := "/agui/runs/run-1/events"
-
-	ts := fmt.Sprintf("%d", time.Now().Unix())
-	sig := signHMAC(secret, http.MethodGet, path, ts)
-
-	req := httptest.NewRequest(http.MethodGet, path, nil)
-	req.Header.Set("X-HMAC-Timestamp", ts)
-	req.Header.Set("X-HMAC-Sign", sig)
+// TestSubmitHandler_InvalidBody 验证非法 JSON 返回 400。
+func TestSubmitHandler_InvalidBody(t *testing.T) {
+	j := agui.NewMemoryJournal()
+	req := httptest.NewRequest(http.MethodPost, "/run", nil)
+	req.Body = io.NopCloser(strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
-	handler := agui.HMACAuth(secret, discardLog())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	handler.ServeHTTP(rec, req)
+	agui.Routes(makeDeps(j, &fakeSubmitter{})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("非法 JSON 应返回 400，实际 %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "invalid_body") {
+		t.Errorf("响应应含 invalid_body，实际 %s", rec.Body.String())
+	}
+}
+
+// TestSubmitHandler_MissingQuery 验证 query 为空返回 400。
+func TestSubmitHandler_MissingQuery(t *testing.T) {
+	j := agui.NewMemoryJournal()
+	body, _ := json.Marshal(map[string]any{
+		"buyer_id":   "b1",
+		"session_id": "s1",
+		"query":      "", // empty
+	})
+	req := httptest.NewRequest(http.MethodPost, "/run", nil)
+	req.Body = io.NopCloser(strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	agui.Routes(makeDeps(j, &fakeSubmitter{})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("空 query 应返回 400，实际 %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "missing_query") {
+		t.Errorf("响应应含 missing_query，实际 %s", rec.Body.String())
+	}
+}
+
+// TestSubmitHandler_SubmitFails 验证 Submitter 报错时返回 500。
+func TestSubmitHandler_SubmitFails(t *testing.T) {
+	j := agui.NewMemoryJournal()
+	body, _ := json.Marshal(map[string]any{
+		"buyer_id":   "b1",
+		"session_id": "s1",
+		"query":      "test",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/run", nil)
+	req.Body = io.NopCloser(strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+
+	failingSubmitter := &fakeSubmitter{respErr: errors.New("submit exploded")}
+	rec := serveWithIdentity(makeDeps(j, failingSubmitter), req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("submit 失败应返回 500，实际 %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "submit_failed") {
+		t.Errorf("响应应含 submit_failed，实际 %s", rec.Body.String())
+	}
+}
+
+// TestSubmitHandler_模型未接入返回503 验证「能力未接入」与「调用失败」被分开。
+//
+// 这两者的处置完全相反：503 表示去开配置（重试无用），500 表示稍后重试。
+// 曾经的实现把 submit 的任何失败都压成 500，等于让运维拿着一条 500 去排查一个
+// 根本不存在的故障——正是这条用例守住的回归。
+func TestSubmitHandler_模型未接入返回503(t *testing.T) {
+	j := agui.NewMemoryJournal()
+	body, _ := json.Marshal(map[string]any{
+		"buyer_id":   "b1",
+		"session_id": "s1",
+		"query":      "登山包",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/run", nil)
+	req.Body = io.NopCloser(strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+
+	// 用 %w 包装，确保分类靠的是 errors.Is 而不是字符串比对。
+	failingSubmitter := &fakeSubmitter{
+		respErr: fmt.Errorf("run 失败: %w", protocol.ErrModelUnavailable),
+	}
+	rec := serveWithIdentity(makeDeps(j, failingSubmitter), req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("模型未接入应返回 503，实际 %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "model_unavailable") {
+		t.Errorf("响应应含 model_unavailable，实际 %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "submit_failed") {
+		t.Errorf("模型未接入不应落到 submit_failed，实际 %s", rec.Body.String())
+	}
+}
+
+// TestMetaHandler_RunNotFound 验证 GET /runs/{id} 对未知 run 返回 404。
+func TestMetaHandler_RunNotFound(t *testing.T) {
+	j := agui.NewMemoryJournal()
+	req := httptest.NewRequest(http.MethodGet, "/runs/nonexistent-run/events", nil)
+
+	rec := httptest.NewRecorder()
+	agui.Routes(makeDeps(j, &fakeSubmitter{})).ServeHTTP(rec, req)
+
+	// 先验证 metaHandler 本身（GET /runs/{runID} 无 events）
+	req2 := httptest.NewRequest(http.MethodGet, "/runs/nonexistent-run", nil)
+	rec2 := httptest.NewRecorder()
+	agui.Routes(makeDeps(j, &fakeSubmitter{})).ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusNotFound {
+		t.Errorf("未知 run 应返回 404，实际 %d", rec2.Code)
+	}
+	if !strings.Contains(rec2.Body.String(), "run_not_found") {
+		t.Errorf("响应应含 run_not_found，实际 %s", rec2.Body.String())
+	}
+}
+
+// TestMetaHandler_JournalError 验证 metaHandler journal 报错时返回 500。
+func TestMetaHandler_JournalError(t *testing.T) {
+	j := &delegatingJournal{MemoryJournal: agui.NewMemoryJournal(), lastSeqErr: errors.New("journal exploded")}
+	req := httptest.NewRequest(http.MethodGet, "/runs/somerun", nil)
+
+	rec := httptest.NewRecorder()
+	agui.Routes(makeDeps(j, &fakeSubmitter{})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("journal 报错应返回 500，实际 %d", rec.Code)
+	}
+}
+
+// delegatingJournal seeds from an embedded MemoryJournal but can inject errors on specific methods.
+type delegatingJournal struct {
+	*agui.MemoryJournal
+	sinceErr    error
+	appendErr   error
+	lastSeqErr  error
+	listRunsErr error
+}
+
+func (d *delegatingJournal) Since(ctx context.Context, runID string, since int64, limit int) ([]runevent.Event, error) {
+	if d.sinceErr != nil {
+		return nil, d.sinceErr
+	}
+	return d.MemoryJournal.Since(ctx, runID, since, limit)
+}
+
+func (d *delegatingJournal) Append(ctx context.Context, ev runevent.Event) (int64, error) {
+	if d.appendErr != nil {
+		return 0, d.appendErr
+	}
+	return d.MemoryJournal.Append(ctx, ev)
+}
+
+func (d *delegatingJournal) LastSeq(ctx context.Context, runID string) (int64, error) {
+	if d.lastSeqErr != nil {
+		return -1, d.lastSeqErr
+	}
+	return d.MemoryJournal.LastSeq(ctx, runID)
+}
+
+func (d *delegatingJournal) ListRuns(ctx context.Context) ([]agui.RunMeta, error) {
+	if d.listRunsErr != nil {
+		return nil, d.listRunsErr
+	}
+	return d.MemoryJournal.ListRuns(ctx)
+}
+
+// TestStreamHandler_CursorInvalid 验证无效 cursor 返回 400。
+func TestStreamHandler_CursorInvalid(t *testing.T) {
+	j := agui.NewMemoryJournal()
+	seedJournal(t, j, "run-cursor", 3)
+
+	req := httptest.NewRequest(http.MethodGet, "/runs/run-cursor/events", nil)
+	req.Header.Set("Last-Event-ID", "not-a-valid-cursor")
+
+	rec := httptest.NewRecorder()
+	agui.Routes(makeDeps(j, &fakeSubmitter{})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("无效 cursor 应返回 400，实际 %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "cursor_invalid") {
+		t.Errorf("响应应含 cursor_invalid，实际 %s", rec.Body.String())
+	}
+}
+
+// TestStreamHandler_CrossRunCursor 验证跨 run cursor 返回 400。
+func TestStreamHandler_CrossRunCursor(t *testing.T) {
+	j := agui.NewMemoryJournal()
+	seedJournal(t, j, "run-a", 3)
+	seedJournal(t, j, "run-b", 3)
+
+	req := httptest.NewRequest(http.MethodGet, "/runs/run-a/events", nil)
+	req.Header.Set("Last-Event-ID", "run-b:1")
+
+	rec := httptest.NewRecorder()
+	agui.Routes(makeDeps(j, &fakeSubmitter{})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("跨 run cursor 应返回 400，实际 %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "cursor_mismatch") {
+		t.Errorf("响应应含 cursor_mismatch，实际 %s", rec.Body.String())
+	}
+}
+
+// TestStreamHandler_JournalError 验证 journal.Since 报错时返回 500。
+func TestStreamHandler_JournalError(t *testing.T) {
+	j := &delegatingJournal{MemoryJournal: agui.NewMemoryJournal(), sinceErr: errors.New("journal io error")}
+	seedJournal(t, j.MemoryJournal, "run-err", 3)
+
+	req := httptest.NewRequest(http.MethodGet, "/runs/run-err/events", nil)
+
+	rec := httptest.NewRecorder()
+	agui.Routes(makeDeps(j, &fakeSubmitter{})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("journal 报错应返回 500，实际 %d", rec.Code)
+	}
+}
+
+// TestStreamHandler_EmptyJournalWithCursor 验证 journal 为空但有 cursor 时返回 400。
+func TestStreamHandler_EmptyJournalWithCursor(t *testing.T) {
+	j := agui.NewMemoryJournal()
+	runID := "run-empty"
+
+	req := httptest.NewRequest(http.MethodGet, "/runs/"+runID+"/events", nil)
+	req.Header.Set("Last-Event-ID", runID+":0") // since=1, lastSeq=-1 → 1 > 0 缺口
+
+	rec := httptest.NewRecorder()
+	agui.Routes(makeDeps(j, &fakeSubmitter{})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("空 journal + cursor 应拒绝，状态码=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "seq_gap") {
+		t.Errorf("响应应含 seq_gap，实际 %s", rec.Body.String())
+	}
+}
+
+// fakeCanceller 记录被取消的 run，并按预设结果应答。
+type fakeCanceller struct {
+	mu      sync.Mutex
+	cancels []string
+	result  bool
+}
+
+func (f *fakeCanceller) Cancel(runID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancels = append(f.cancels, runID)
+	return f.result
+}
+
+// TestCancelEndpoint_Unsupported 验证未接入运行控制时返回 503 而不是假装成功。
+//
+// 用 200 应答一个没有真正中断推理的取消，会让调用方以为 token 已经省下，
+// 而循环还在跑——这种「成功」比明确报错贵得多。
+func TestCancelEndpoint_Unsupported(t *testing.T) {
+	j := agui.NewMemoryJournal()
+	deps := makeDeps(j, &fakeSubmitter{})
+	// Canceller 故意留空
+
+	req := httptest.NewRequest(http.MethodPost, "/runs/run-x/cancel", nil)
+	rec := httptest.NewRecorder()
+	agui.Routes(deps).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("未接入运行控制应返回 503，实际 %d", rec.Code)
+	}
+}
+
+// TestCancelEndpoint_NotActive 验证取消一个不在跑的 run 返回 404。
+func TestCancelEndpoint_NotActive(t *testing.T) {
+	j := agui.NewMemoryJournal()
+	deps := makeDeps(j, &fakeSubmitter{})
+	deps.Canceller = &fakeCanceller{result: false}
+
+	req := httptest.NewRequest(http.MethodPost, "/runs/run-x/cancel", nil)
+	rec := httptest.NewRecorder()
+	agui.Routes(deps).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("取消不在跑的 run 应返回 404，实际 %d", rec.Code)
+	}
+}
+
+// TestCancelEndpoint_CancelsRun 验证取消会真正交给 Canceller，且 runID 传对。
+func TestCancelEndpoint_CancelsRun(t *testing.T) {
+	j := agui.NewMemoryJournal()
+	canceller := &fakeCanceller{result: true}
+	deps := makeDeps(j, &fakeSubmitter{})
+	deps.Canceller = canceller
+
+	req := httptest.NewRequest(http.MethodPost, "/runs/run-42/cancel", nil)
+	rec := httptest.NewRecorder()
+	agui.Routes(deps).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("鉴权失败：%d，body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("取消应返回 200，实际 %d：%s", rec.Code, rec.Body.String())
+	}
+	if len(canceller.cancels) != 1 || canceller.cancels[0] != "run-42" {
+		t.Fatalf("Canceller 收到的 runID 不对：%v", canceller.cancels)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("响应不是合法 JSON：%v", err)
+	}
+	if body["cancelled"] != true || body["run_id"] != "run-42" {
+		t.Fatalf("响应体不符合契约：%v", body)
 	}
 }
 
-func TestHMACAuth_RejectsBadSignature(t *testing.T) {
-	secret := []byte(hmacTestSecret)
-	path := "/agui/runs/run-1/events"
-	ts := fmt.Sprintf("%d", time.Now().Unix())
+// TestSubmitHandler_RejectsWithoutIdentity 验证没有买家身份时 submit 被拒。
+//
+// 这条守的是「身份只能来自中间件」这个不变量：请求体里写满 buyer_id 也没用，
+// 中间件没给出身份就是 401。
+func TestSubmitHandler_RejectsWithoutIdentity(t *testing.T) {
+	j := agui.NewMemoryJournal()
+	sub := &fakeSubmitter{resp: submitEventsJSON("run-x", 1)}
 
-	req := httptest.NewRequest(http.MethodGet, path, nil)
-	req.Header.Set("X-HMAC-Timestamp", ts)
-	req.Header.Set("X-HMAC-Sign", "deadbeef")
+	body, _ := json.Marshal(map[string]any{
+		"buyer_id":   "attacker",
+		"session_id": "stolen",
+		"query":      "test",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/run", nil)
+	req.Body = io.NopCloser(strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
 
+	// 故意不套身份中间件：模拟一个漏挂鉴权的部署。
 	rec := httptest.NewRecorder()
-	handler := agui.HMACAuth(secret, discardLog())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	handler.ServeHTTP(rec, req)
+	agui.Routes(makeDeps(j, sub)).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("状态码 = %d，期望 401", rec.Code)
+		t.Fatalf("无身份应返回 401，实际 %d body=%s", rec.Code, rec.Body.String())
+	}
+	if sub.CallCount() != 0 {
+		t.Errorf("无身份的请求不应触达 submitter，实际调用 %d 次", sub.CallCount())
 	}
 }
 
-// signHMAC 重新计算签名（与 auth.go 等价）。
-func signHMAC(secret []byte, method, path, ts string) string {
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(method))
-	mac.Write([]byte("\n"))
-	mac.Write([]byte(path))
-	mac.Write([]byte("\n"))
-	mac.Write([]byte(ts))
-	return hex.EncodeToString(mac.Sum(nil))
+// TestSubmitHandler_SessionFromHeader 验证会话走 X-Session-ID 而非令牌。
+func TestSubmitHandler_SessionFromHeader(t *testing.T) {
+	j := agui.NewMemoryJournal()
+	sub := &fakeSubmitter{resp: submitEventsJSON("run-x", 1)}
+
+	body, _ := json.Marshal(map[string]any{"query": "test"})
+	req := httptest.NewRequest(http.MethodPost, "/run", nil)
+	req.Body = io.NopCloser(strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Session-ID", "sess-from-header")
+
+	rec := serveWithIdentity(makeDeps(j, sub), req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got, ok := sub.LastCall()
+	if !ok {
+		t.Fatal("submitter 未被调用")
+	}
+	if got.SessionID != "sess-from-header" {
+		t.Errorf("SessionID = %q，期望 sess-from-header", got.SessionID)
+	}
 }

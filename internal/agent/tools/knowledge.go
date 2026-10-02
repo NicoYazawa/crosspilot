@@ -2,6 +2,7 @@ package tools
 
 // Knowledge and capability tools
 
+// CategoryInsightToolDef 返回 category_insight_tool 的 JSON Schema 声明。
 func CategoryInsightToolDef() ToolDef {
 	return ToolDef{
 		Name:        "category_insight_tool",
@@ -24,6 +25,7 @@ func CategoryInsightToolDef() ToolDef {
 	}
 }
 
+// ConversationFactLookupToolDef 返回 conversation_fact_lookup_tool 的 JSON Schema 声明。
 func ConversationFactLookupToolDef() ToolDef {
 	return ToolDef{
 		Name:        "conversation_fact_lookup_tool",
@@ -87,6 +89,7 @@ func ConversationFactLookupToolDef() ToolDef {
 	}
 }
 
+// LoadAgentSkillToolDef 返回 load_agent_skill_tool 的 JSON Schema 声明。
 func LoadAgentSkillToolDef() ToolDef {
 	return ToolDef{
 		Name:        "load_agent_skill_tool",
@@ -108,6 +111,7 @@ func LoadAgentSkillToolDef() ToolDef {
 	}
 }
 
+// LookupStrategyMemoryToolDef 返回 lookup_strategy_memory_tool 的 JSON Schema 声明。
 func LookupStrategyMemoryToolDef() ToolDef {
 	return ToolDef{
 		Name:        "lookup_strategy_memory_tool",
@@ -130,6 +134,7 @@ func LookupStrategyMemoryToolDef() ToolDef {
 	}
 }
 
+// WebSearchToolDef 返回 web_search_tool 的 JSON Schema 声明。
 func WebSearchToolDef() ToolDef {
 	return ToolDef{
 		Name:        "web_search_tool",

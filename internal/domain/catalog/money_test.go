@@ -305,3 +305,32 @@ func TestMoneyJSONPadsToCurrencyScale(t *testing.T) {
 		t.Errorf("序列化结果 = %s，期望 %s", raw, want)
 	}
 }
+
+func TestToMajorUnits(t *testing.T) {
+	m := MustMoney("29.99", USD)
+	whole, frac := m.ToMajorUnits()
+	if whole != 29 || frac != 99 {
+		t.Errorf("ToMajorUnits() = (%d, %d), want (29, 99)", whole, frac)
+	}
+
+	// 整元
+	m2 := MustMoney("100.00", USD)
+	whole2, frac2 := m2.ToMajorUnits()
+	if whole2 != 100 || frac2 != 0 {
+		t.Errorf("ToMajorUnits() = (%d, %d), want (100, 0)", whole2, frac2)
+	}
+
+	// JPY 零位小数
+	m3 := MustMoney("1234", JPY)
+	whole3, frac3 := m3.ToMajorUnits()
+	if whole3 != 1234 || frac3 != 0 {
+		t.Errorf("ToMajorUnits() JPY = (%d, %d), want (1234, 0)", whole3, frac3)
+	}
+
+	// 负数（frac 部分与 whole 同号）
+	m4 := MustMoney("-5.75", USD)
+	whole4, frac4 := m4.ToMajorUnits()
+	if whole4 != -5 || frac4 != -75 {
+		t.Errorf("ToMajorUnits() 负数 = (%d, %d), want (-5, -75)", whole4, frac4)
+	}
+}

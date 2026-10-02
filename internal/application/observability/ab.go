@@ -3,18 +3,24 @@
 // D6 决策：A/B 分组由 ExperimentStore 决定，本用例只做聚合查询。
 // LLM-judge 留接口位（Judge interface + StubJudge），等 judge 模型就绪后再实跑。
 // F8 实测需外部 judge 模型 + 标注集 → 留缺口。
+
 package observability
 
 import (
 	"context"
 	"errors"
+
+	domainobs "github.com/NicoYazawa/crosspilot/internal/domain/observability"
 )
 
 // ErrExperimentNotFound 表示 key 不存在。
 //
 // 与「该 key 没有 run」的区别：NotFound 表示 key 未注册；Empty 表示注册了但
 // 还没有 run 进入。两种情况下返回的 ArmSummary 切片都是空，错误用于让上层区分。
-var ErrExperimentNotFound = errors.New("observability: 实验 key 未注册")
+//
+// 值定义在 domain/observability：判定它的是基础设施层的适配器，infra 不允许
+// 依赖 application。别名引用同一个值，errors.Is 照常成立。
+var ErrExperimentNotFound = domainobs.ErrExperimentNotFound
 
 // ExperimentArms 把某个实验的各臂聚合返回给面板。
 //

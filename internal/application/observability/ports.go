@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/NicoYazawa/crosspilot/internal/agent/runevent"
+	domainobs "github.com/NicoYazawa/crosspilot/internal/domain/observability"
 )
 
 // JournalStore 是事件日志的读端口。
@@ -41,22 +42,9 @@ type CostStore interface {
 
 // CostEvent 是单次模型调用的成本记录。
 //
-// 字段都从 observability.cost 表出，币种以最小单位计（F3 留待外部资源验证）。
-//
-// 注：P6 起统一 snake_case JSON tag。
-type CostEvent struct {
-	EventID         string `json:"event_id"`
-	RunID           string `json:"run_id"`
-	Provider        string `json:"provider"`
-	Model           string `json:"model"`
-	TokensIn        int64  `json:"tokens_in"`
-	TokensOut       int64  `json:"tokens_out"`
-	TokensCached    int64  `json:"tokens_cached"`
-	TokensReasoning int64  `json:"tokens_reasoning"`
-	CostMinor       int64  `json:"cost_minor"`
-	Currency        string `json:"currency"`
-	Unpriced        bool   `json:"unpriced"` // F4 闸门：true 表示未命中价格表
-}
+// 定义放在 domain/observability：CostStore 的实现是 Postgres 适配器，若记录
+// 类型留在本包，infra 就必须反向依赖 application——那正是依赖方向检查禁止的。
+type CostEvent = domainobs.CostEvent
 
 // ExperimentStore 是 A/B 实验元数据端口。
 //
@@ -72,18 +60,8 @@ type ExperimentStore interface {
 
 // ArmSummary 是实验臂的聚合统计。
 //
-// Calls / LatencyP95 / CostTotal / UnpricedCount 是 F10「与 token 无关」的核心
-// 指标——即便跨协议族 token 口径不同，这四条仍可比。
-//
-// 注：P6 起统一 snake_case JSON tag。Judge 评分（F8 缺口）不暴露字段。
-type ArmSummary struct {
-	Arm            string `json:"arm"`
-	Calls          int64  `json:"calls"`
-	LatencyP95Ms   int64  `json:"latency_p95_ms"`
-	CostTotalMinor int64  `json:"cost_total_minor"`
-	Currency       string `json:"currency"`
-	UnpricedCount  int64  `json:"unpriced_count"`
-}
+// 同 CostEvent：形状在 domain，端口在本包，实现由 infra 提供。
+type ArmSummary = domainobs.ArmSummary
 
 // Clock 提供当前时间；为 nil 时使用 time.Now。
 type Clock interface {

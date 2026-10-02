@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -122,7 +123,7 @@ func newRouter(j *fakeJournal, c *fakeCostStore) *chi.Mux {
 	h := preobs.NewHandler(uc, metrics)
 	inner := h.Routes()
 	r := chi.NewRouter()
-	r.Mount("/", inner)
+	r.Mount("/observability", inner)
 	return r
 }
 
@@ -289,5 +290,205 @@ func TestHandler_Metrics_ReturnsSnapshot(t *testing.T) {
 	// 默认 metrics（NewMetrics 后没 Emit 过）：全 0
 	if snap.EmitTotal != 0 || snap.DroppedTotal != 0 {
 		t.Errorf("新 metrics 应全 0，实际 %+v", snap)
+	}
+}
+
+// --- error-branch tests ---
+
+// fakeCostStoreError always returns an error from CostOfRun.
+type fakeCostStoreError struct {
+	err error
+}
+
+func (f *fakeCostStoreError) CostOfRun(_ context.Context, _ string) ([]appobs.CostEvent, error) {
+	return nil, f.err
+}
+
+// newRouterWithErrStores builds a router with arbitrary store implementations.
+func newRouterWithErrStores(j appobs.JournalStore, c appobs.CostStore, e appobs.ExperimentStore) *chi.Mux {
+	uc := appobs.New(j, c, e, nil)
+	metrics := agentobs.NewMetrics("handler_test_" + nextMetricID())
+	h := preobs.NewHandler(uc, metrics)
+	inner := h.Routes()
+	r := chi.NewRouter()
+	r.Mount("/observability", inner)
+	return r
+}
+
+// TestHandler_RunCost_CostStoreError 验证 CostStore 报错时返回 500。
+func TestHandler_RunCost_CostStoreError(t *testing.T) {
+	t.Parallel()
+	j := newFakeJournal()
+	c := &fakeCostStoreError{err: errors.New("cost store exploded")}
+	r := newRouterWithErrStores(j, c, fakeExpStore{})
+
+	req := httptest.NewRequest(http.MethodGet, "/observability/runs/r1/cost", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("CostStore 报错应返回 500，实际 %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "成本查询失败") {
+		t.Errorf("响应应含成本查询失败，实际 %s", w.Body.String())
+	}
+}
+
+// TestHandler_RunDiff_SameBaselineAndAgainst 验证 baseline == against 时返回 400。
+func TestHandler_RunDiff_SameBaselineAndAgainst(t *testing.T) {
+	t.Parallel()
+	r := newRouter(newFakeJournal(), &fakeCostStore{events: map[string][]appobs.CostEvent{}})
+	req := httptest.NewRequest(http.MethodGet, "/observability/runs/r1/diff?against=r1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("baseline == against 应返回 400，实际 %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "baseline 与 against 不能相同") {
+		t.Errorf("响应应含 baseline 与 against 不能相同，实际 %s", w.Body.String())
+	}
+}
+
+// fakeJournalError always returns an error from Since.
+type fakeJournalError struct {
+	err error
+}
+
+func (f *fakeJournalError) Append(_ context.Context, _ runevent.Event) (int64, error) {
+	return 0, nil
+}
+func (f *fakeJournalError) Since(_ context.Context, _ string, _ int64, _ int) ([]runevent.Event, error) {
+	return nil, f.err
+}
+func (f *fakeJournalError) LastSeq(_ context.Context, _ string) (int64, error) {
+	return -1, f.err
+}
+
+// TestHandler_RunDiff_JournalError 验证 Journal.Since 报错时返回 500。
+func TestHandler_RunDiff_JournalError(t *testing.T) {
+	t.Parallel()
+	j := &fakeJournalError{err: errors.New("journal read error")}
+	c := &fakeCostStore{events: map[string][]appobs.CostEvent{}}
+	r := newRouterWithErrStores(j, c, fakeExpStore{})
+
+	req := httptest.NewRequest(http.MethodGet, "/observability/runs/base/diff?against=against", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("journal 报错应返回 500，实际 %d", w.Code)
+	}
+}
+
+// fakeExpStoreError returns a configurable error on ArmsSummary.
+type fakeExpStoreError struct {
+	err error
+}
+
+func (fakeExpStoreError) ArmFor(_ context.Context, _ string) (string, bool, error) {
+	return "", false, nil
+}
+
+func (f *fakeExpStoreError) ArmsSummary(_ context.Context, _ string) ([]appobs.ArmSummary, error) {
+	return nil, f.err
+}
+
+// TestHandler_ExperimentArms_NotFound 验证未注册的 experiment key 返回 404。
+func TestHandler_ExperimentArms_NotFound(t *testing.T) {
+	t.Parallel()
+	expErrStore := &fakeExpStoreError{err: appobs.ErrExperimentNotFound}
+	j := newFakeJournal()
+	c := &fakeCostStore{events: map[string][]appobs.CostEvent{}}
+	r := newRouterWithErrStores(j, c, expErrStore)
+
+	req := httptest.NewRequest(http.MethodGet, "/observability/experiments/unknown-key/arms", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("未注册 key 应返回 404，实际 %d", w.Code)
+	}
+}
+
+// TestHandler_ExperimentArms_InternalError 验证 ExperimentStore 未知错误返回 500。
+func TestHandler_ExperimentArms_InternalError(t *testing.T) {
+	t.Parallel()
+	expErrStore := &fakeExpStoreError{err: errors.New("store internal error")}
+	j := newFakeJournal()
+	c := &fakeCostStore{events: map[string][]appobs.CostEvent{}}
+	r := newRouterWithErrStores(j, c, expErrStore)
+
+	req := httptest.NewRequest(http.MethodGet, "/observability/experiments/exp1/arms", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("store 内部错误应返回 500，实际 %d", w.Code)
+	}
+}
+
+// TestHandler_Metrics_NilMetricsReturns503 验证 Metrics 为 nil 时返回 503。
+func TestHandler_Metrics_NilMetricsReturns503(t *testing.T) {
+	t.Parallel()
+	j := newFakeJournal()
+	c := &fakeCostStore{events: map[string][]appobs.CostEvent{}}
+	uc := appobs.New(j, c, fakeExpStore{}, nil)
+	h := preobs.NewHandler(uc, nil) // Metrics = nil
+	inner := h.Routes()
+	r := chi.NewRouter()
+	r.Mount("/observability", inner)
+
+	req := httptest.NewRequest(http.MethodGet, "/observability/metrics", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("Metrics 为 nil 应返回 503，实际 %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "metrics 未挂载") {
+		t.Errorf("响应应含 metrics 未挂载，实际 %s", w.Body.String())
+	}
+}
+
+// TestHandler_ReplayEvents_JournalError 验证 Journal.Since 报错时返回 500。
+func TestHandler_ReplayEvents_JournalError(t *testing.T) {
+	t.Parallel()
+	j := &fakeJournalError{err: errors.New("journal read error")}
+	c := &fakeCostStore{events: map[string][]appobs.CostEvent{}}
+	r := newRouterWithErrStores(j, c, fakeExpStore{})
+
+	req := httptest.NewRequest(http.MethodGet, "/observability/runs/r1/events", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("journal 报错应返回 500，实际 %d", w.Code)
+	}
+}
+
+// TestHandler_ReplayEvents_InvalidFromParam 验证 from 参数无效时返回 400。
+func TestHandler_ReplayEvents_InvalidFromParam(t *testing.T) {
+	t.Parallel()
+	r := newRouter(newFakeJournal(), &fakeCostStore{events: map[string][]appobs.CostEvent{}})
+	req := httptest.NewRequest(http.MethodGet, "/observability/runs/r1/events?from=NaN", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("from=NaN 应返回 400，实际 %d", w.Code)
+	}
+}
+
+// TestHandler_ReplayEvents_InvalidLimitParam 验证 limit 参数无效时返回 400。
+func TestHandler_ReplayEvents_InvalidLimitParam(t *testing.T) {
+	t.Parallel()
+	r := newRouter(newFakeJournal(), &fakeCostStore{events: map[string][]appobs.CostEvent{}})
+	req := httptest.NewRequest(http.MethodGet, "/observability/runs/r1/events?limit=bad", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("limit=bad 应返回 400，实际 %d", w.Code)
 	}
 }

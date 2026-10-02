@@ -86,7 +86,7 @@ func TestMetrics_QueueDepthUpdates(t *testing.T) {
 		Redactor:   noopRedactor{},
 		Metrics:    metrics,
 	})
-	defer emitter.Close()
+	defer func() { _ = emitter.Close() }()
 
 	// 不起 Run，所以事件堆积
 	for i := 0; i < 3; i++ {
@@ -105,6 +105,30 @@ var metricCounter atomic.Int64
 // expvar 的 var 名字必须全局唯一——同一名字被 Publish 两次会 panic。
 func uniqueMetricName(prefix string) string {
 	return prefix + "_" + strconv.FormatInt(metricCounter.Add(1), 10)
+}
+
+// TestMetrics_AddRedactErrors_NilReceiver 验证 nil receiver 不 panic。
+func TestMetrics_AddRedactErrors_NilReceiver(_ *testing.T) {
+	var m *Metrics
+	m.AddRedactErrors(1)
+}
+
+// TestMetrics_AddEmitErrors_NilReceiver 验证 nil receiver 不 panic。
+func TestMetrics_AddEmitErrors_NilReceiver(_ *testing.T) {
+	var m *Metrics
+	m.AddEmitErrors(1)
+}
+
+// TestMetrics_AddDropped_NilReceiver 验证 nil receiver 不 panic。
+func TestMetrics_AddDropped_NilReceiver(_ *testing.T) {
+	var m *Metrics
+	m.AddDropped(1)
+}
+
+// TestMetrics_SetQueueDepth_NilReceiver 验证 nil receiver 不 panic。
+func TestMetrics_SetQueueDepth_NilReceiver(_ *testing.T) {
+	var m *Metrics
+	m.SetQueueDepth(10)
 }
 
 // 编译期检查 runevent 仍在引用。

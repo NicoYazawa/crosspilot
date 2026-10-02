@@ -61,8 +61,8 @@ func NewTariffSchedule(rates ExchangeRateTable) *TariffSchedule {
 	return &TariffSchedule{rates: rates}
 }
 
-// ShippingQuote 跨境到手价三要素：商品小计、运费、关税。
-type ShippingQuote struct {
+// Quote 跨境到手价三要素：商品小计、运费、关税。
+type Quote struct {
 	ShipTo           catalog.Money
 	Subtotal         catalog.Money
 	Freight          catalog.Money
@@ -72,7 +72,7 @@ type ShippingQuote struct {
 }
 
 // LandedTotal 返回到手总价：商品小计 + 运费 + 关税。
-func (q ShippingQuote) LandedTotal() (catalog.Money, error) {
+func (q Quote) LandedTotal() (catalog.Money, error) {
 	total, err := q.Subtotal.Add(q.Freight)
 	if err != nil {
 		return catalog.Money{}, err
@@ -81,7 +81,7 @@ func (q ShippingQuote) LandedTotal() (catalog.Money, error) {
 }
 
 // ToDict 返回可序列化的字典表示。
-func (q ShippingQuote) ToDict() map[string]any {
+func (q Quote) ToDict() map[string]any {
 	landed, _ := q.LandedTotal()
 	return map[string]any{
 		"ship_to":            q.ShipTo.String(),
@@ -112,45 +112,45 @@ func (ts *TariffSchedule) Quote(
 	shipTo string,
 	quantity int,
 	targetCurrency catalog.Currency,
-) (ShippingQuote, error) {
+) (Quote, error) {
 	if quantity <= 0 {
-		return ShippingQuote{}, fmt.Errorf("shipping: quantity 必须为正整数，当前为 %d", quantity)
+		return Quote{}, fmt.Errorf("shipping: quantity 必须为正整数，当前为 %d", quantity)
 	}
 
 	rateTable, ok := _tariffRates[shipTo]
 	if !ok {
-		return ShippingQuote{}, fmt.Errorf("%w: %s（支持 %v）", ErrUnsupportedDestination, shipTo, ts.SupportedDestinations())
+		return Quote{}, fmt.Errorf("%w: %s（支持 %v）", ErrUnsupportedDestination, shipTo, ts.SupportedDestinations())
 	}
 
 	// 1. 商品小计折算为目标币种
 	subtotalTarget, err := ts.rates.Convert(subtotal, targetCurrency)
 	if err != nil {
-		return ShippingQuote{}, fmt.Errorf("shipping: 折算小计时出错: %w", err)
+		return Quote{}, fmt.Errorf("shipping: 折算小计时出错: %w", err)
 	}
 
 	// 2. 运费计算（首件全价 + 续件 60%）
 	freightFactor := 1.0 + 0.6*float64(quantity-1)
 	freightFactorDec, err := decimal.Parse(fmt.Sprintf("%g", freightFactor))
 	if err != nil {
-		return ShippingQuote{}, fmt.Errorf("shipping: 构造运费因子时出错: %w", err)
+		return Quote{}, fmt.Errorf("shipping: 构造运费因子时出错: %w", err)
 	}
 
 	baseFreightMinor := _baseFreightCNYMinor[shipTo]
 	baseFreightAmount, err := decimal.New(baseFreightMinor, 2) // 分转元，scale=2
 	if err != nil {
-		return ShippingQuote{}, fmt.Errorf("shipping: 构造基础运费时出错: %w", err)
+		return Quote{}, fmt.Errorf("shipping: 构造基础运费时出错: %w", err)
 	}
 	freightAmount, err := baseFreightAmount.Mul(freightFactorDec)
 	if err != nil {
-		return ShippingQuote{}, fmt.Errorf("shipping: 计算运费时出错: %w", err)
+		return Quote{}, fmt.Errorf("shipping: 计算运费时出错: %w", err)
 	}
 	freightCNY, err := catalog.NewMoney(freightAmount, catalog.CNY)
 	if err != nil {
-		return ShippingQuote{}, fmt.Errorf("shipping: 构造运费金额时出错: %w", err)
+		return Quote{}, fmt.Errorf("shipping: 构造运费金额时出错: %w", err)
 	}
 	freightTarget, err := ts.rates.Convert(freightCNY, targetCurrency)
 	if err != nil {
-		return ShippingQuote{}, fmt.Errorf("shipping: 折算运费时出错: %w", err)
+		return Quote{}, fmt.Errorf("shipping: 折算运费时出错: %w", err)
 	}
 
 	// 3. 关税计算
@@ -160,7 +160,7 @@ func (ts *TariffSchedule) Quote(
 	}
 	if tariffRate.IsZero() {
 		// 零税率：商品本身不收关税，不涉及 de minimis 豁免
-		return ShippingQuote{
+		return Quote{
 			ShipTo:           freightTarget,
 			Subtotal:         subtotalTarget,
 			Freight:          freightTarget,
@@ -172,13 +172,13 @@ func (ts *TariffSchedule) Quote(
 
 	subtotalCNY, err := ts.rates.Convert(subtotal, catalog.CNY)
 	if err != nil {
-		return ShippingQuote{}, fmt.Errorf("shipping: 折算为 CNY 时出错: %w", err)
+		return Quote{}, fmt.Errorf("shipping: 折算为 CNY 时出错: %w", err)
 	}
 
 	// 将 subtotalCNY 转为整数分
 	subtotalMinor, err := moneyToMinorInt64(subtotalCNY)
 	if err != nil {
-		return ShippingQuote{}, fmt.Errorf("shipping: 获取整数分时出错: %w", err)
+		return Quote{}, fmt.Errorf("shipping: 获取整数分时出错: %w", err)
 	}
 
 	deMinimisMinor := _deMinimisCNYMinor[shipTo]
@@ -191,25 +191,25 @@ func (ts *TariffSchedule) Quote(
 		taxableMinor := subtotalMinor - deMinimisMinor
 		taxableDec, err := decimal.New(taxableMinor, 0)
 		if err != nil {
-			return ShippingQuote{}, fmt.Errorf("shipping: 构造计税金额时出错: %w", err)
+			return Quote{}, fmt.Errorf("shipping: 构造计税金额时出错: %w", err)
 		}
 		taxableMoney, err := catalog.NewMoney(taxableDec, catalog.CNY)
 		if err != nil {
-			return ShippingQuote{}, fmt.Errorf("shipping: 构造计税金额时出错: %w", err)
+			return Quote{}, fmt.Errorf("shipping: 构造计税金额时出错: %w", err)
 		}
 		tariffCNY, err = taxableMoney.Mul(tariffRate)
 		if err != nil {
-			return ShippingQuote{}, fmt.Errorf("shipping: 计算关税时出错: %w", err)
+			return Quote{}, fmt.Errorf("shipping: 计算关税时出错: %w", err)
 		}
 		_ = math.Float64frombits(0) // silence unused import
 	}
 
 	tariffTarget, err := ts.rates.Convert(tariffCNY, targetCurrency)
 	if err != nil {
-		return ShippingQuote{}, fmt.Errorf("shipping: 折算关税时出错: %w", err)
+		return Quote{}, fmt.Errorf("shipping: 折算关税时出错: %w", err)
 	}
 
-	return ShippingQuote{
+	return Quote{
 		ShipTo:           freightTarget,
 		Subtotal:         subtotalTarget,
 		Freight:          freightTarget,

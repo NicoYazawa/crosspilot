@@ -27,9 +27,6 @@ var (
 	// ErrNotFound 表示按标识未查到商品。
 	ErrNotFound = errors.New("catalog: 商品不存在")
 
-	// ErrInvalidSearchSpec 表示检索条件不合法。
-	ErrInvalidSearchSpec = errors.New("catalog: 非法检索条件")
-
 	// ErrInvalidProduct 表示商品不满足领域约束。
 	ErrInvalidProduct = errors.New("catalog: 非法商品")
 

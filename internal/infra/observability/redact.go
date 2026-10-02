@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
-	"strings"
 )
 
 // RuleKind 是脱敏规则的类别名。
@@ -21,6 +20,8 @@ import (
 // 且不被现有字符串同义覆盖。
 type RuleKind string
 
+// RulePhone 及其后的各常量是脱敏规则的类别标识，同时也是对外契约：
+// 测试断言与审计日志都按这些字符串比对，因此只能新增，不能改名或复用作它义。
 const (
 	RulePhone       RuleKind = "PHONE"
 	RuleEmail       RuleKind = "EMAIL"
@@ -82,11 +83,6 @@ func NewRedactor() (*Redactor, error) {
 		return nil, fmt.Errorf("observability: 构造默认脱敏规则失败: %w", err)
 	}
 	return &Redactor{rules: rules, minKeyLen: 32}, nil
-}
-
-// NewRedactorWithRules 用自定义规则构造脱敏器（测试用）。
-func NewRedactorWithRules(rules []Rule) *Redactor {
-	return &Redactor{rules: rules, minKeyLen: 32}
 }
 
 // Rules 返回当前规则列表的副本（调试/审计用）。
@@ -222,6 +218,3 @@ func defaultRules() ([]Rule, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
-
-// 保留 strings 引用以便后续扩展（如 token 切片校验）。
-var _ = strings.Contains

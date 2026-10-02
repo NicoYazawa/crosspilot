@@ -5,6 +5,7 @@
 // 「unknown」，不报 change（避免误报）。
 //
 // 应用场景：评测团队比较同一 query 在两个 agent 版本下的事件序列差异。
+
 package observability
 
 import (
@@ -19,6 +20,7 @@ import (
 // DiffKind 是差异类型。
 type DiffKind string
 
+// 差异类型枚举：added / removed / changed。
 const (
 	DiffAdded   DiffKind = "added"   // 仅在 against 出现
 	DiffRemoved DiffKind = "removed" // 仅在 baseline 出现

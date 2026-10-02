@@ -152,6 +152,9 @@ func (b *Breaker) Record(err error) {
 				b.OnOpen()
 			}
 		}
+	case StateOpen:
+		// 已处于熔断态：重复的瞬时错误不改变状态，也无需刷新 openedAt——
+		// 是否放行完全由 Allow 的 openFor 计时决定，这里不能再重复开一次。
 	case StateHalfOpen:
 		// 半开窗口里又出现一次瞬时错误：重新熔断。
 		b.transition(StateOpen)

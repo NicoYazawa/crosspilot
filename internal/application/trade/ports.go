@@ -21,29 +21,12 @@ type ProductCatalog interface {
 
 // CatalogProduct 是下单所需的商品读模型：一件商品及其全部规格报价。
 //
-// 为什么不用 catalog.Product：领域里的 Product 是面向检索与展示的模型，只有单一
-// Price，既没有规格也没有库存。而确认单的每一行必须钉在「某个规格的价格」上——
-// 同一件商品的不同规格价格不同，用商品级价格下单就是按错误的价格成交。
-//
-// 与其给领域模型塞进一个它此刻并不需要的规格结构（那会牵动所有既有的目录消费方），
-// 不如在应用层声明服务需要的最小读模型：目录实现负责把自己的数据映射过来，
-// 服务层因此不依赖任何具体的目录形状，换成关系库、向量库或远程接口都不影响这里。
-type CatalogProduct struct {
-	ProductID string
-	Title     string
-	SKUs      []CatalogSKU
-}
+// 形状定义在 domain/catalog：实现它的是基础设施层的 Postgres 适配器，类型若
+// 留在这里，infra 就必须反向依赖 application——那正是依赖方向检查禁止的一条边。
+type CatalogProduct = catalog.OrderableProduct
 
 // CatalogSKU 是商品下一个规格的权威报价与库存。
-//
-// Price 用领域金额类型而不是最小单位整数：币种小数位、精度与溢出规则由 catalog.Money
-// 统一承担，服务层只负责在交给账本前换成最小单位一次。
-type CatalogSKU struct {
-	SKUID string
-	Spec  string
-	Price catalog.Money
-	Stock int64
-}
+type CatalogSKU = catalog.OrderableSKU
 
 // Clock 提供当前时间。
 //

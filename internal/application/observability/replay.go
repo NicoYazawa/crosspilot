@@ -5,6 +5,7 @@
 // 回放不可能与原始事件序列不一致。
 //
 // D7 决策：不另建 event 表——observability schema 只存成本/归因/diff 标记。
+
 package observability
 
 import (
