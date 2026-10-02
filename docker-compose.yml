@@ -62,8 +62,11 @@ services:
         CGO_ENABLED: "0"
     image: crosspilot-app:latest
     container_name: crosspilot-app
+    # 只绑回环：/observability/* 那一组没有鉴权（见 internal/presentation/http/
+    # router.go 的挂载说明），发布到 0.0.0.0 就等于把它交给同网段的任何人。
+    # 运维在本机仍可 curl localhost:8000/health 与 /observability/* 排障。
     ports:
-      - "${APP_PORT:-8000}:8000"
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
     environment:
       # HTTP 服务地址
       CROSSPILOT_HTTP_ADDR: ":8000"
@@ -81,29 +84,50 @@ services:
       QDRANT_HOST: qdrant
       QDRANT_PORT: 6334
       # LLM Provider
+      #
+      # 宿主侧（.env）用短名 QWEN_API_KEY，容器内必须是 config 认识的
+      # LLM_ 前缀名——internal/config/config.go 的 provider() 读的是
+      # LLM_QWEN_API_KEY。两套名字不一致时不会报错，只会「密钥读不到」，
+      # 表现为接口回 503 model_unavailable，很难往命名上想。
+      #
+      # 这层映射不能省：environment: 是内联的，本文件没有 env_file，
+      # .env 只参与 ${...} 替换，不会自动进容器。
+      #
+      # 也别写 ${A:-${B:-x}}：compose 的变量替换不支持嵌套默认值，
+      # 会原样把整串当成字面量。
       LLM_DEFAULT_PROVIDER: ${LLM_DEFAULT_PROVIDER:-qwen}
       # Qwen
-      QWEN_API_KEY: ${QWEN_API_KEY:-${LLM_API_KEY}:-必须设置 LLM_API_KEY 或 QWEN_API_KEY}
-      QWEN_BASE_URL: ${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
-      QWEN_MODEL: ${QWEN_MODEL:-qwen-plus}
+      LLM_QWEN_API_KEY: ${QWEN_API_KEY:-}
+      LLM_QWEN_BASE_URL: ${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      LLM_QWEN_MODEL: ${QWEN_MODEL:-qwen3-max}
       # MiniMax
-      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
-      MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-https://api.minimax.chat/v1}
-      MINIMAX_MODEL: ${MINIMAX_MODEL:-MiniMax-M2}
+      LLM_MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+      LLM_MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-https://api.minimax.chat/v1}
+      LLM_MINIMAX_MODEL: ${MINIMAX_MODEL:-MiniMax-M2}
       # DeepSeek
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
-      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
-      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
-      # Anthropic
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+      LLM_DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      LLM_DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+      LLM_DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      # Anthropic。Messages 协议族，适配器尚未实现：把它设为默认 provider
+      # 时接口回 503，而不是拿一个必然 400 的请求去打它。
+      LLM_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      LLM_ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5-5}
       # 可观测性（可选）
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_SERVICE_NAME: crosspilot-api
       # CORS（前端开发服务器）
       CROSSPILOT_HTTP_CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:5173}"
-      # JWT（必填；运行时检查，空字符串会触发 server 报错）
+      # 商品引导文件。只被 crosspilot-catalog-import 读取（见 Dockerfile 的
+      # ENTRYPOINT）；库非空时它自己会跳过，重启不会重复导入。
+      CATALOG_BOOTSTRAP_PATH: /app/data/catalog-v3.jsonl.gz
+      # JWT 密钥。留空 = 本地开发模式：router.go 会补一个固定的 demo 身份
+      # （demo-buyer），链路照常跑通，前端也不需要令牌。
+      #
+      # 生产必须设：设了之后鉴权生效，此时前端必须能拿到令牌，否则界面全线 401。
+      # 而当前前端只能靠构建期 VITE_AUTH_TOKEN 注入（等于把凭据打进 JS bundle，
+      # 正是从 HMAC 换到 JWT 时否掉的做法），所以生产还缺一个运行时换令牌的
+      # 身份服务——那之前不要把这个部署当生产用。
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
     depends_on:
       postgres:

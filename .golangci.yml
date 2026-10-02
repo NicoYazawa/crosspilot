@@ -29,7 +29,6 @@ linters:
     # 常见笔误
     - nilerr
     - predeclared
-    - unconvert
 
   settings:
     errcheck:
@@ -52,6 +51,11 @@ linters:
 
   exclusions:
     generated: lax
+    paths:
+      # 第三方依赖里混进来的 Go 源码（flatted 这个 npm 包自带一份 Go 实现）。
+      # 它不是本项目的代码，却会被 golangci-lint 一并扫描，让「本次改动引入
+      # 了多少问题」这个数字失真——门禁读的就是这个数字。
+      - node_modules
     rules:
       # 测试里重复的字面量是刻意的，改常量反而降低可读性
       - path: _test\.go

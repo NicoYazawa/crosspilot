@@ -22,9 +22,13 @@ import (
 
 // config 是门槛文件的结构。
 type config struct {
-	Version    int         `yaml:"version"`
-	Rules      []rule      `yaml:"rules"`
-	Exclusions []exclusion `yaml:"exclusions"`
+	Version int `yaml:"version"`
+	// WeightedMin 是加权覆盖率门槛（百分数）。用指针而不是 float64，
+	// 是为了区分「写了 0」和「没写」：漏写时应当报错，而不是静默地
+	// 把加权门禁关掉。指针为 nil 即表示配置里没有这个键。
+	WeightedMin *float64    `yaml:"weighted_min"`
+	Rules       []rule      `yaml:"rules"`
+	Exclusions  []exclusion `yaml:"exclusions"`
 }
 
 // rule 是一条覆盖率要求。
@@ -72,6 +76,14 @@ func run(profilePath, thresholdsPath string) error {
 		return err
 	}
 
+	// 死规则只依赖配置本身，先于覆盖率报告检查：
+	// 一条永远不会生效的规则等同于没有这条规则，必须在它被人当成
+	// 「已经守住了某个包」之前就暴露出来。
+	if dead := shadowedRules(cfg); len(dead) > 0 {
+		return fmt.Errorf("门槛配置存在永远不会生效的规则：\n%s\n请删除该死规则，或调整前缀/顺序使其可达",
+			strings.Join(dead, "\n"))
+	}
+
 	packages, err := loadProfile(profilePath)
 	if err != nil {
 		return err
@@ -97,6 +109,12 @@ func loadConfig(path string) (*config, error) {
 	}
 	if cfg.Version != 1 {
 		return nil, fmt.Errorf("门槛配置版本应为 1，实际 %d", cfg.Version)
+	}
+	if cfg.WeightedMin == nil {
+		return nil, errors.New("门槛配置缺少 weighted_min（加权覆盖率门槛）")
+	}
+	if *cfg.WeightedMin < 0 || *cfg.WeightedMin > 100 {
+		return nil, fmt.Errorf("weighted_min 的门槛 %v 不在 [0,100]", *cfg.WeightedMin)
 	}
 	if len(cfg.Rules) == 0 {
 		return nil, errors.New("门槛配置里没有任何规则")
@@ -202,6 +220,10 @@ func packageOf(block string) string {
 }
 
 func report(packages []packageCoverage, cfg *config) {
+	weighted, statements := weightedPercent(packages, cfg)
+	fmt.Printf("加权覆盖率（非排除包，按语句数加权）：%.1f%%（门槛 %.1f%%，统计 %d 条语句）\n",
+		weighted, *cfg.WeightedMin, statements)
+
 	fmt.Println("包覆盖率：")
 	for _, p := range packages {
 		status := "??"
@@ -239,6 +261,11 @@ func check(packages []packageCoverage, cfg *config) error {
 	}
 
 	var errs []error
+	if got, statements := weightedPercent(packages, cfg); got < *cfg.WeightedMin {
+		errs = append(errs, fmt.Errorf(
+			"加权覆盖率 %.1f%%，低于门槛 %.1f%%（仅统计非排除包，共 %d 条语句）",
+			got, *cfg.WeightedMin, statements))
+	}
 	if len(unmanaged) > 0 {
 		errs = append(errs, fmt.Errorf(
 			"以下包既未命中规则也未豁免，请在 coverage-thresholds.yaml 里明确其归属：\n  %s",
@@ -248,6 +275,75 @@ func check(packages []packageCoverage, cfg *config) error {
 		errs = append(errs, fmt.Errorf("以下包未达门槛：\n%s", strings.Join(failures, "\n")))
 	}
 	return errors.Join(errs...)
+}
+
+// weightedPercent 计算非排除包的加权覆盖率，并返回参与统计的语句总数。
+//
+// 公式（与开发计划 §4.2 一致）：Σ(包语句数 × 包覆盖率) / Σ(包语句数)。
+//
+// 口径说明：计划里说的「行数」在本工具里取覆盖率报告给出的「语句数」——
+// go test -coverprofile 的每条记录就是「<起> <止> <语句数> <命中次数>」，
+// 语句数即该覆盖块的语句条数，也是 go tool cover 报告的计数单位。同一份
+// profile 同时给出总语句数与命中语句数，无需另行数源码行，且天然与
+// percent() 的口径一致。因此上式等价于 Σ命中语句数 / Σ语句数。
+//
+// 仅统计非排除包：被 exclusions 命中的包不计入分子，也不计入分母。
+func weightedPercent(packages []packageCoverage, cfg *config) (float64, int64) {
+	var statements, covered int64
+	for _, p := range packages {
+		if _, excluded := matchExclusion(cfg, p.name); excluded {
+			continue
+		}
+		statements += p.statements
+		covered += p.covered
+	}
+	if statements == 0 {
+		return 0, 0
+	}
+	return float64(covered) / float64(statements) * 100, statements
+}
+
+// shadowedRules 找出永远不可能命中的规则，返回可读的中文说明。
+//
+// 有死规则和没写这条规则是一回事，但前者会让人误以为某个包已经被守住，
+// 因此必须显式报出来。有两类：
+//
+//  1. 被某条豁免完全覆盖。exclusions 优先于 rules，落在豁免前缀之下的
+//     规则永远不会被 check() 用到——persistence/pg 的 min:70 就是这样
+//     被更宽的 persistence/ 豁免架空的。
+//  2. 被排在自己前面的、范围更大的规则完全覆盖。规则按书写顺序取先命中者，
+//     后写的窄规则如果整体落在前面的宽规则之下，也永远命不中。
+//
+// 判定只看前缀包含关系（matches），与覆盖率报告里实际出现哪些包无关，
+// 这样即使某个包这次没被测到，死规则也不会因此「看起来是活的」。
+func shadowedRules(cfg *config) []string {
+	var out []string
+	for i, r := range cfg.Rules {
+		if e, covered := coveredByExclusion(cfg, r.Prefix); covered {
+			out = append(out, fmt.Sprintf(
+				"  规则 %s 被豁免 %s 完全覆盖：豁免优先，该规则永远不会生效", r.Prefix, e))
+			continue
+		}
+		for j := 0; j < i; j++ {
+			if matches(cfg.Rules[j].Prefix, r.Prefix) {
+				out = append(out, fmt.Sprintf(
+					"  规则 %s 被前面的规则 %s 完全覆盖：先命中者生效，该规则永远不会生效",
+					r.Prefix, cfg.Rules[j].Prefix))
+				break
+			}
+		}
+	}
+	return out
+}
+
+// coveredByExclusion 判断某个前缀是否整体落在一条豁免之下。
+func coveredByExclusion(cfg *config, prefix string) (string, bool) {
+	for _, e := range cfg.Exclusions {
+		if matches(e.Prefix, prefix) {
+			return e.Prefix, true
+		}
+	}
+	return "", false
 }
 
 func matchRule(cfg *config, name string) (rule, bool) {
